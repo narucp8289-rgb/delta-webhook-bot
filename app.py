@@ -1,11 +1,18 @@
-import os, time, hmac, hashlib, requests, json
+import os, time, hmac, hashlib, requests, json, threading
+from flask import Flask
+
+app = Flask(__name__)
 
 API_KEY = "zemWuOQERwluGB0QmkgeFI1n4gnxC6"
 API_SECRET = "rNmbnx4fOfsN6RYItSlJCtcehgJi3QfcDm0t13YRAci6rnoB0TF86XQfoco8"
 BASE_URL = "https://cdn-ind.testnet.delta.exchange"
-PRODUCT_ID = 1  # ETH/USD Product ID
+PRODUCT_ID = 1  # ETH/USD
 
-position = None  # Current position state: 'BUY', 'SELL', or None
+position = None
+
+@app.route('/')
+def home():
+    return "Bot is running live!"
 
 def generate_signature(method, endpoint, payload_str, timestamp):
     message = method + timestamp + endpoint + payload_str
@@ -37,7 +44,6 @@ def send_order(action, size=1):
         print("Order Error:", e)
 
 def fetch_candles():
-    # Fetch recent 1-hour candles for ETH/USD
     url = f"{BASE_URL}/v2/chart/history?resolution=60&symbol=ETHUSD"
     try:
         res = requests.get(url).json()
@@ -47,35 +53,38 @@ def fetch_candles():
         print("Candle Fetch Error:", e)
     return None
 
-def check_fibonacci_strategy():
-    candles = fetch_candles()
-    if not candles or len(candles) < 20:
-        return
+def bot_loop():
+    print("Direct Delta Fibonacci Bot Loop Started...")
+    while True:
+        try:
+            candles = fetch_candles()
+            if candles and len(candles) >= 20:
+                highs = [c['h'] for c in candles[-20:]]
+                lows = [c['l'] for c in candles[-20:]]
+                current_close = candles[-1]['c']
 
-    # Extract High, Low, and Current Close prices
-    highs = [c['h'] for c in candles[-20:]]
-    lows = [c['l'] for c in candles[-20:]]
-    current_close = candles[-1]['c']
+                max_high = max(highs)
+                min_low = min(lows)
+                fib_0_5 = min_low + (max_high - min_low) * 0.5
 
-    max_high = max(highs)
-    min_low = min(lows)
+                print(f"High: {max_high} | Low: {min_low} | Fib 0.5: {fib_0_5} | Current Price: {current_close}")
 
-    # 0.5 Fibonacci Level Calculation
-    fib_0_5 = min_low + (max_high - min_low) * 0.5
-
-    print(f"High: {max_high} | Low: {min_low} | Fib 0.5: {fib_0_5} | Current Price: {current_close}")
-
-    # Trading Logic
-    global position
-    if current_close > fib_0_5 and position != "BUY":
-        print(">>> Fibonacci 0.5 Bullish Crossover! Executing BUY...")
-        send_order("BUY")
-    elif current_close < fib_0_5 and position != "SELL":
-        print(">>> Fibonacci 0.5 Bearish Crossover! Executing SELL...")
-        send_order("SELL")
+                global position
+                if current_close > fib_0_5 and position != "BUY":
+                    print(">>> Fibonacci 0.5 Bullish Crossover! Executing BUY...")
+                    send_order("BUY")
+                elif current_close < fib_0_5 and position != "SELL":
+                    print(">>> Fibonacci 0.5 Bearish Crossover! Executing SELL...")
+                    send_order("SELL")
+        except Exception as e:
+            print("Loop Exception:", e)
+            
+        time.sleep(60)
 
 if __name__ == "__main__":
-    print("Direct Delta Fibonacci Bot Started...")
-    while True:
-        check_fibonacci_strategy()
-        time.sleep(60)  # Check strategy every 1 minute
+    # બેકગ્રાઉન્ડમાં બોટ લોજિક ચાલુ થશે
+    threading.Thread(target=bot_loop, daemon=True).start()
+    
+    # Render માટે પોર્ટ ચાલુ કરવો
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
