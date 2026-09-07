@@ -1,2 +1,5 @@
 requests
 flask
+numpy
+pandas
+ta
