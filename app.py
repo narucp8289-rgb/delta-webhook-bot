@@ -17,6 +17,9 @@ TELEGRAM_CHAT_ID = "5305261922"
 SL_AMOUNT = 20.0
 TP_AMOUNT = 40.0
 
+# Active Trade Tracker State
+active_position = None  # Stores: {"side": "BUY"/"SELL", "entry": price, "sl": price, "tp": price}
+
 def send_telegram(message):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -87,17 +90,58 @@ def calculate_indicators():
         "is_4h_uptrend": is_4h_uptrend
     }
 
+def check_active_position(current_price):
+    global active_position
+    if not active_position:
+        return
+
+    side = active_position["side"]
+    entry = active_position["entry"]
+    sl = active_position["sl"]
+    tp = active_position["tp"]
+
+    # Check for BUY Position SL / TP
+    if side == "BUY":
+        if current_price >= tp:
+            msg = f"🎯 *TAKE PROFIT HIT! (WIN)*\n\n*Symbol:* {SYMBOL}\n*Side:* BUY\n*Entry:* ${entry}\n*Exit:* ${current_price}\n*Profit:* +${TP_AMOUNT}"
+            send_telegram(msg)
+            active_position = None
+        elif current_price <= sl:
+            msg = f"🛑 *STOP LOSS HIT! (LOSS)*\n\n*Symbol:* {SYMBOL}\n*Side:* BUY\n*Entry:* ${entry}\n*Exit:* ${current_price}\n*Loss:* -${SL_AMOUNT}"
+            send_telegram(msg)
+            active_position = None
+
+    # Check for SELL Position SL / TP
+    elif side == "SELL":
+        if current_price <= tp:
+            msg = f"🎯 *TAKE PROFIT HIT! (WIN)*\n\n*Symbol:* {SYMBOL}\n*Side:* SELL\n*Entry:* ${entry}\n*Exit:* ${current_price}\n*Profit:* +${TP_AMOUNT}"
+            send_telegram(msg)
+            active_position = None
+        elif current_price >= sl:
+            msg = f"🛑 *STOP LOSS HIT! (LOSS)*\n\n*Symbol:* {SYMBOL}\n*Side:* SELL\n*Entry:* ${entry}\n*Exit:* ${current_price}\n*Loss:* -${SL_AMOUNT}"
+            send_telegram(msg)
+            active_position = None
+
 def execute_trade(side, price):
+    global active_position
     sl = price - SL_AMOUNT if side == "BUY" else price + SL_AMOUNT
     tp = price + TP_AMOUNT if side == "BUY" else price - TP_AMOUNT
     
+    # Save active trade position
+    active_position = {
+        "side": side,
+        "entry": price,
+        "sl": sl,
+        "tp": tp
+    }
+
     emoji = "🚀" if side == "BUY" else "🔻"
-    msg = (f"{emoji} *HIGH CONFIRMATION {side} TRADE EXECUTED!*\n\n"
+    msg = (f"{emoji} *NEW {side} TRADE EXECUTED!*\n\n"
            f"*Symbol:* {SYMBOL}\n"
            f"*Entry Price:* ${price}\n"
            f"*Stop Loss:* ${sl} (-${SL_AMOUNT})\n"
            f"*Take Profit:* ${tp} (+${TP_AMOUNT})\n"
-           f"*Strategy:* 4H Trend + 15M Breakout/Breakdown + Vol Spike")
+           f"*Strategy:* 4H Trend + 15M Breakout/Breakdown")
     
     print(f"Executing {side} Trade at {price}")
     send_telegram(msg)
@@ -113,33 +157,29 @@ def home():
         rec_low = data["recent_low"]
         is_4h_uptrend = data["is_4h_uptrend"]
 
-        # BUY / LONG Signal Conditions:
-        # 1. 4H Trend is UP (Price > 4H 200 EMA)
-        # 2. 15M Candle Close Breakout above Recent High
-        # 3. Volume Spike (1.5x)
-        # 4. RSI > 50
-        if is_4h_uptrend and price > rec_high and vol_spike and rsi > 50:
-            execute_trade("BUY", price)
+        # 1. Track SL/TP if there is an active trade
+        check_active_position(price)
 
-        # SELL / SHORT Signal Conditions:
-        # 1. 4H Trend is DOWN (Price < 4H 200 EMA)
-        # 2. 15M Candle Close Breakdown below Recent Low
-        # 3. Volume Spike (1.5x)
-        # 4. RSI < 50
-        elif (not is_4h_uptrend) and price < rec_low and vol_spike and rsi < 50:
-            execute_trade("SELL", price)
+        # 2. Look for NEW trade signals only if NO trade is currently active
+        if active_position is None:
+            # BUY Signal
+            if is_4h_uptrend and price > rec_high and vol_spike and rsi > 50:
+                execute_trade("BUY", price)
+
+            # SELL Signal
+            elif (not is_4h_uptrend) and price < rec_low and vol_spike and rsi < 50:
+                execute_trade("SELL", price)
 
         return jsonify({
             "status": "running",
-            "strategy": "4H Trend + 15M Breakout/Breakdown",
+            "strategy": "4H Trend + 15M Breakout/Breakdown (SL/TP Tracking Active)",
             "price": price,
             "rsi": rsi,
-            "vol_spike": vol_spike,
-            "is_4h_uptrend": is_4h_uptrend
+            "active_trade": active_position
         })
     return jsonify({"status": "error fetching data"})
 
 if __name__ == "__main__":
-    send_telegram("🤖 *Bot Updated with 4H Trend & 15M Breakdown Strategy!* Listening for signals...")
+    send_telegram("🤖 *Bot Updated with SL/TP Live Alerts!* System fully ready.")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
