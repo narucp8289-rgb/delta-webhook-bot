@@ -13,8 +13,7 @@ from threading import Thread
 # ==========================================
 API_KEY = "JRbVTfMgzkMENWh3fvy074F2JH95Fm"
 API_SECRET = "y4yLw2wzHIruaHcXb4QP6j20n8VCvsqc25HTJClrjA2vlUv5efqQF3ZuM8MJ"
-BASE_URL = "https://cdn.testnet.delta.exchange"
-
+BASE_URL = "https://api.testnet.delta.exchange"
 SYMBOL = "ETHUSD"
 LOOKBACK = 50
 STOP_LOSS_PTS = 15.0
