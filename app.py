@@ -55,6 +55,35 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
+def find_swing_levels(df):
+    """
+    Finds the most recent valid Swing High and Swing Low using 5-candle Fractal logic.
+    A candle is a Swing High if its high is higher than 2 candles before and 2 candles after it.
+    """
+    swing_highs = []
+    swing_lows = []
+    
+    # We look through historical candles excluding the current live forming candle (-1)
+    for i in range(2, len(df) - 3):
+        # Swing High
+        if (df['high'].iloc[i] > df['high'].iloc[i-1] and 
+            df['high'].iloc[i] > df['high'].iloc[i-2] and 
+            df['high'].iloc[i] > df['high'].iloc[i+1] and 
+            df['high'].iloc[i] > df['high'].iloc[i+2]):
+            swing_highs.append(df['high'].iloc[i])
+            
+        # Swing Low
+        if (df['low'].iloc[i] < df['low'].iloc[i-1] and 
+            df['low'].iloc[i] < df['low'].iloc[i-2] and 
+            df['low'].iloc[i] < df['low'].iloc[i+1] and 
+            df['low'].iloc[i] < df['low'].iloc[i+2]):
+            swing_lows.append(df['low'].iloc[i])
+            
+    recent_swing_high = swing_highs[-1] if swing_highs else df['high'].iloc[-20:-1].max()
+    recent_swing_low = swing_lows[-1] if swing_lows else df['low'].iloc[-20:-1].min()
+    
+    return recent_swing_high, recent_swing_low
+
 def calculate_indicators():
     df_4h = get_candles(resolution="4h", limit=100)
     df_15m = get_candles(resolution="15m", limit=100)
@@ -72,9 +101,8 @@ def calculate_indicators():
     df_15m["rsi"] = calculate_rsi(df_15m["close"], 14)
     df_15m["vol_avg"] = df_15m["volume"].rolling(window=20).mean()
 
-    # Support / Resistance Levels (Last 20 candles high/low)
-    df_15m["recent_high"] = df_15m["high"].iloc[-20:-1].max()
-    df_15m["recent_low"] = df_15m["low"].iloc[-20:-1].min()
+    # Find Swing High/Low levels
+    swing_high, swing_low = find_swing_levels(df_15m)
 
     latest_15m = df_15m.iloc[-1]
 
@@ -85,8 +113,8 @@ def calculate_indicators():
         "price": float(latest_15m["close"]),
         "rsi": float(latest_15m["rsi"]),
         "volume_spike": has_volume_spike,
-        "recent_high": float(latest_15m["recent_high"]),
-        "recent_low": float(latest_15m["recent_low"]),
+        "swing_high": float(swing_high),
+        "swing_low": float(swing_low),
         "is_4h_uptrend": is_4h_uptrend
     }
 
@@ -127,7 +155,6 @@ def execute_trade(side, price):
     sl = price - SL_AMOUNT if side == "BUY" else price + SL_AMOUNT
     tp = price + TP_AMOUNT if side == "BUY" else price - TP_AMOUNT
     
-    # Save active trade position
     active_position = {
         "side": side,
         "entry": price,
@@ -141,7 +168,7 @@ def execute_trade(side, price):
            f"*Entry Price:* ${price}\n"
            f"*Stop Loss:* ${sl} (-${SL_AMOUNT})\n"
            f"*Take Profit:* ${tp} (+${TP_AMOUNT})\n"
-           f"*Strategy:* 4H Trend + 15M Breakout/Breakdown")
+           f"*Strategy:* Smart Swing Breakout + Liquidity Filter")
     
     print(f"Executing {side} Trade at {price}")
     send_telegram(msg)
@@ -153,8 +180,8 @@ def home():
         price = data["price"]
         rsi = data["rsi"]
         vol_spike = data["volume_spike"]
-        rec_high = data["recent_high"]
-        rec_low = data["recent_low"]
+        swing_high = data["swing_high"]
+        swing_low = data["swing_low"]
         is_4h_uptrend = data["is_4h_uptrend"]
 
         # 1. Track SL/TP if there is an active trade
@@ -162,24 +189,26 @@ def home():
 
         # 2. Look for NEW trade signals only if NO trade is currently active
         if active_position is None:
-            # BUY Signal
-            if is_4h_uptrend and price > rec_high and vol_spike and rsi > 50:
+            # BUY Signal (4H Uptrend + Candle Close > Swing High + Volume Spike + RSI > 50)
+            if is_4h_uptrend and price > swing_high and vol_spike and rsi > 50:
                 execute_trade("BUY", price)
 
-            # SELL Signal
-            elif (not is_4h_uptrend) and price < rec_low and vol_spike and rsi < 50:
+            # SELL Signal (4H Downtrend + Candle Close < Swing Low + Volume Spike + RSI < 50)
+            elif (not is_4h_uptrend) and price < swing_low and vol_spike and rsi < 50:
                 execute_trade("SELL", price)
 
         return jsonify({
             "status": "running",
-            "strategy": "4H Trend + 15M Breakout/Breakdown (SL/TP Tracking Active)",
+            "strategy": "Smart Swing Breakout (Fractal High/Low + Liquidity Filter)",
             "price": price,
             "rsi": rsi,
+            "swing_high": swing_high,
+            "swing_low": swing_low,
             "active_trade": active_position
         })
     return jsonify({"status": "error fetching data"})
 
 if __name__ == "__main__":
-    send_telegram("🤖 *Bot Updated with SL/TP Live Alerts!* System fully ready.")
+    send_telegram("🤖 *Bot Updated with Smart Swing High/Low & Liquidity Filter!*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
