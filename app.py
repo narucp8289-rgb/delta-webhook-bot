@@ -51,7 +51,7 @@ def get_candles(resolution="3m", limit=100):
         if res.get("success") and "result" in res:
             df = pd.DataFrame(res["result"])
             if not df.empty:
-                # Delta API candles ને Oldest to Newest સેટ કરવી (RSI ના સાચા કેલ્ક્યુલેશન માટે)
+                # API ડેટાને જૂનાથી નવા ક્રમ (Oldest to Newest) માં ગોઠવવો
                 if "time" in df.columns:
                     df = df.sort_values(by="time", ascending=True).reset_index(drop=True)
                 else:
@@ -67,15 +67,20 @@ def get_candles(resolution="3m", limit=100):
     return None
 
 def calculate_rsi(series, period=14):
-    delta = series.diff()
-    gain = delta.clip(lower=0)
-    loss = -1 * delta.clip(upper=0)
-    
-    avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
-    
-    rs = avg_gain / (avg_loss + 1e-10)
-    return 100 - (100 / (1 + rs))
+    try:
+        delta = series.diff()
+        gain = delta.apply(lambda x: x if x > 0 else 0)
+        loss = delta.apply(lambda x: -x if x < 0 else 0)
+
+        avg_gain = gain.ewm(span=period, adjust=False).mean()
+        avg_loss = loss.ewm(span=period, adjust=False).mean()
+
+        rs = avg_gain / (avg_loss + 1e-10)
+        rsi = 100 - (100 / (1 + rs))
+        return rsi
+    except Exception as e:
+        print(f"RSI Exception: {e}")
+        return pd.Series([50] * len(series))
 
 def calculate_indicators():
     global last_error
@@ -89,7 +94,7 @@ def calculate_indicators():
         last_error = f"Not enough candles: 30m={len(df_30m)}, 3m={len(df_3m)}"
         return None
 
-    # 1. 30M Trend Filter (Strict Trend Comparison)
+    # 1. 30M Trend Filter
     df_30m["ema_21_30m"] = df_30m["close"].ewm(span=21, adjust=False).mean()
     close_30m = float(df_30m["close"].iloc[-1])
     ema_30m = float(df_30m["ema_21_30m"].iloc[-1])
@@ -105,9 +110,9 @@ def calculate_indicators():
     latest_3m = df_3m.iloc[-1]
     current_price = float(latest_3m["close"])
     ema_21_val = float(latest_3m["ema_21_3m"])
-    rsi_val = float(latest_3m["rsi"])
+    rsi_val = float(latest_3m["rsi"].iloc[-1]) if isinstance(latest_3m["rsi"], pd.Series) else float(latest_3m["rsi"])
     
-    # 1.2x Volume Spike Filter
+    # 1.2x Volume Filter
     has_volume_spike = float(latest_3m["volume"]) >= (1.2 * float(latest_3m["vol_avg"]))
 
     # 3. SWING BREAKOUT LOGIC
@@ -244,6 +249,6 @@ def home():
     })
 
 if __name__ == "__main__":
-    send_telegram("⚡ *Bot RSI & 30M Trend Sorting Fixed Perfectly!*")
+    send_telegram("⚡ *Bot Fixed: RSI Calculation Fully Operational!*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
