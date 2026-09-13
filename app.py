@@ -9,9 +9,9 @@ from flask import Flask, jsonify
 app = Flask(__name__)
 
 # ================= CONFIGURATION =================
-# Reliable Public Market Data Endpoint for ETHUSD / ETHUSDT
-BINANCE_URL = "https://api.binance.com/api/v3/klines"
-SYMBOL = "ETHUSDT"
+# OKX Public API (Works globally without geo-restrictions on cloud servers)
+OKX_URL = "https://www.okx.com/api/v5/market/candles"
+SYMBOL = "ETH-USDT"
 
 # Telegram Configuration
 TELEGRAM_TOKEN = "8682624980:AAEBi3mlG6dTnG0DOmq5nJ50HsSLjU0FrFo"
@@ -40,36 +40,46 @@ def send_telegram(message):
         print(f"Telegram Error: {e}")
 
 # ================= TECHNICAL ANALYSIS =================
-def get_candles(interval="3m", limit=100):
+def get_candles(bar="3m", limit=100):
     global last_error
     try:
+        # OKX timeframe notation: 3m, 30m
         params = {
-            "symbol": SYMBOL,
-            "interval": interval,
+            "instId": SYMBOL,
+            "bar": bar,
             "limit": limit
         }
         
-        response = requests.get(BINANCE_URL, params=params, timeout=10)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        }
+        
+        response = requests.get(OKX_URL, params=params, headers=headers, timeout=10)
         res = response.json()
         
-        if isinstance(res, list) and len(res) > 0:
-            # Kline Structure: [Open time, Open, High, Low, Close, Volume, ...]
-            df = pd.DataFrame(res, columns=[
-                "open_time", "open", "high", "low", "close", "volume",
-                "close_time", "quote_asset_volume", "number_of_trades",
-                "taker_buy_base_asset_volume", "taker_buy_quote_asset_volume", "ignore"
-            ])
+        if res.get("code") == "0" and "data" in res:
+            raw_data = res["data"]
+            if len(raw_data) > 0:
+                # OKX Format: [ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm]
+                df = pd.DataFrame(raw_data, columns=[
+                    "ts", "open", "high", "low", "close", "volume", 
+                    "volCcy", "volCcyQuote", "confirm"
+                ])
 
-            # Convert numeric types explicitly
-            for col in ["close", "high", "low", "open", "volume"]:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
+                # Convert numeric types explicitly
+                for col in ["close", "high", "low", "open", "volume"]:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
 
-            df = df.dropna(subset=["close", "high", "low", "volume"]).reset_index(drop=True)
-            return df
+                # OKX returns latest candle first -> reverse so oldest is at index 0
+                df = df.iloc[::-1].reset_index(drop=True)
+                df = df.dropna(subset=["close", "high", "low", "volume"]).reset_index(drop=True)
+                return df
+            else:
+                last_error = "Empty data returned from OKX"
         else:
-            last_error = f"API Error Response: {res}"
+            last_error = f"OKX API Error: {res.get('msg')}"
     except Exception as e:
-        last_error = f"Fetch exception ({interval}): {e}"
+        last_error = f"Fetch exception ({bar}): {e}"
         print(last_error)
     return None
 
@@ -94,8 +104,8 @@ def calculate_rsi(close_series, period=14):
 
 def calculate_indicators():
     global last_error
-    df_30m = get_candles(interval="30m", limit=100)
-    df_3m = get_candles(interval="3m", limit=100)
+    df_30m = get_candles(bar="30m", limit=100)
+    df_3m = get_candles(bar="3m", limit=100)
     
     if df_30m is None or df_3m is None:
         return None
@@ -259,6 +269,6 @@ def home():
     })
 
 if __name__ == "__main__":
-    send_telegram("⚡ *Bot Fixed: 100% Reliable Kline Feed Connected & RSI Active!*")
+    send_telegram("⚡ *Bot Fixed: Switched to OKX Public API - No Location Restriction!*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
