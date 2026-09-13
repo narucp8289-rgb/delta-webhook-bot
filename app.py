@@ -108,7 +108,7 @@ def calculate_indicators():
     return {
         "price": current_price,
         "ema_21_3m": ema_21_val,
-        "rsi": rsi_val,
+        "rsi": round(rsi_val, 2),
         "volume_spike": has_volume_spike,
         "is_30m_uptrend": is_30m_uptrend,
         "is_30m_downtrend": is_30m_downtrend,
@@ -173,10 +173,9 @@ def execute_trade(side, price):
     print(f"Executing {side} Trade at {price}")
     send_telegram(msg)
 
-# ================= BACKGROUND CONTINUOUS MONITORING LOOP =================
+# ================= BACKGROUND AUTO-SCANNER LOOP =================
 def trading_bot_loop():
     global latest_market_data
-    time.sleep(5)
     while True:
         try:
             data = calculate_indicators()
@@ -196,29 +195,21 @@ def trading_bot_loop():
         except Exception as e:
             print(f"Loop Error: {e}")
         
-        time.sleep(10) # દર 10 સેકન્ડે માર્કેટ સ્કેન થશે
+        time.sleep(10)
 
+# Start continuous scanner thread immediately
 threading.Thread(target=trading_bot_loop, daemon=True).start()
-
-# ================= KEEP-ALIVE (ANTI-SLEEP) =================
-def keep_alive():
-    time.sleep(10)
-    while True:
-        try:
-            render_url = os.environ.get("RENDER_EXTERNAL_URL")
-            if render_url:
-                requests.get(render_url, timeout=10)
-            else:
-                requests.get("http://127.0.0.1:10000", timeout=5)
-        except Exception as e:
-            pass
-        time.sleep(240)
-
-threading.Thread(target=keep_alive, daemon=True).start()
 
 # ================= FLASK SERVER ROUTES =================
 @app.route('/')
 def home():
+    global latest_market_data
+    # If background loop hasn't updated yet, calculate instantly
+    if not latest_market_data:
+        data = calculate_indicators()
+        if data:
+            latest_market_data = data
+
     return jsonify({
         "status": "running",
         "mode": "Continuous 10s Scanner (Volume 1.2x & RSI 50)",
@@ -227,6 +218,6 @@ def home():
     })
 
 if __name__ == "__main__":
-    send_telegram("⚡ *Bot Updated with 24/7 Auto-Scanner Loop!*")
+    send_telegram("⚡ *Bot Updated with Instant Market Data!*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
