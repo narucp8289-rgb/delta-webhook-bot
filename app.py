@@ -42,7 +42,6 @@ def get_candles(resolution="3m", limit=100):
     global last_error
     try:
         current_time = int(time.time())
-        # resolution પ્રમાણે સેકન્ડ્સ ગણવી
         res_seconds = 180 if resolution == "3m" else 1800
         start_time = current_time - (limit * res_seconds)
 
@@ -52,8 +51,12 @@ def get_candles(resolution="3m", limit=100):
         if res.get("success") and "result" in res:
             df = pd.DataFrame(res["result"])
             if not df.empty:
-                # Chronological order સેટ કરવા માટે
-                df = df.sort_values(by="time").reset_index(drop=True)
+                # Delta API candles ને Oldest to Newest સેટ કરવી (RSI ના સાચા કેલ્ક્યુલેશન માટે)
+                if "time" in df.columns:
+                    df = df.sort_values(by="time", ascending=True).reset_index(drop=True)
+                else:
+                    df = df.iloc[::-1].reset_index(drop=True)
+
                 for col in ["close", "high", "low", "open", "volume"]:
                     df[col] = df[col].astype(float)
                 return df
@@ -65,9 +68,13 @@ def get_candles(resolution="3m", limit=100):
 
 def calculate_rsi(series, period=14):
     delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / (loss + 1e-10)
+    gain = delta.clip(lower=0)
+    loss = -1 * delta.clip(upper=0)
+    
+    avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
+    
+    rs = avg_gain / (avg_loss + 1e-10)
     return 100 - (100 / (1 + rs))
 
 def calculate_indicators():
@@ -82,10 +89,13 @@ def calculate_indicators():
         last_error = f"Not enough candles: 30m={len(df_30m)}, 3m={len(df_3m)}"
         return None
 
-    # 1. 30M Trend Filter
+    # 1. 30M Trend Filter (Strict Trend Comparison)
     df_30m["ema_21_30m"] = df_30m["close"].ewm(span=21, adjust=False).mean()
-    is_30m_uptrend = float(df_30m["close"].iloc[-1]) > float(df_30m["ema_21_30m"].iloc[-1])
-    is_30m_downtrend = float(df_30m["close"].iloc[-1]) < float(df_30m["ema_21_30m"].iloc[-1])
+    close_30m = float(df_30m["close"].iloc[-1])
+    ema_30m = float(df_30m["ema_21_30m"].iloc[-1])
+
+    is_30m_uptrend = close_30m >= ema_30m
+    is_30m_downtrend = close_30m < ema_30m
 
     # 2. 3M Indicators
     df_3m["ema_21_3m"] = df_3m["close"].ewm(span=21, adjust=False).mean()
@@ -97,7 +107,7 @@ def calculate_indicators():
     ema_21_val = float(latest_3m["ema_21_3m"])
     rsi_val = float(latest_3m["rsi"])
     
-    # 1.2x Volume Filter
+    # 1.2x Volume Spike Filter
     has_volume_spike = float(latest_3m["volume"]) >= (1.2 * float(latest_3m["vol_avg"]))
 
     # 3. SWING BREAKOUT LOGIC
@@ -234,6 +244,6 @@ def home():
     })
 
 if __name__ == "__main__":
-    send_telegram("⚡ *Bot Fixed with Correct Delta API Timeframe Parameters!*")
+    send_telegram("⚡ *Bot RSI & 30M Trend Sorting Fixed Perfectly!*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
