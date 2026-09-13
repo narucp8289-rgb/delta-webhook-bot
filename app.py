@@ -8,7 +8,7 @@ from flask import Flask, jsonify
 app = Flask(__name__)
 
 # ================= CONFIGURATION =================
-BASE_URL = "https://api.testnet.delta.exchange"
+BASE_URL = "https://api.delta.exchange"
 SYMBOL = "ETHUSD"
 
 # Telegram Configuration
