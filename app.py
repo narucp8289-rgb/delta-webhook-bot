@@ -53,16 +53,20 @@ def get_candles(resolution="3m", limit=100):
             raw_data = res["result"]
             if len(raw_data) > 0:
                 df = pd.DataFrame(raw_data)
-                
-                # REVERSE CHRONOLOGY FIX: Delta sends newest candle first, we force reverse it to Oldest -> Newest
+
+                # Column Mapping (Check for both full and short names)
+                col_map = {'c': 'close', 'h': 'high', 'l': 'low', 'o': 'open', 'v': 'volume', 't': 'start'}
+                df = df.rename(columns=col_map)
+
+                # Force reverse chronology to Oldest -> Newest
                 df = df.iloc[::-1].reset_index(drop=True)
 
-                # Convert numeric columns strictly
+                # Strict Numeric Float Conversion
                 for col in ["close", "high", "low", "open", "volume"]:
                     if col in df.columns:
                         df[col] = pd.to_numeric(df[col], errors='coerce')
 
-                df = df.dropna(subset=["close", "high", "low", "volume"]).reset_index(drop=True)
+                df = df.dropna(subset=["close", "high", "low"]).reset_index(drop=True)
                 return df
                 
         last_error = f"API Error: {res}"
@@ -96,7 +100,7 @@ def calculate_indicators():
     if df_30m is None or df_3m is None:
         return None
 
-    if len(df_30m) < 25 or len(df_3m) < 25:
+    if len(df_30m) < 15 or len(df_3m) < 15:
         last_error = f"Not enough candles: 30m={len(df_30m)}, 3m={len(df_3m)}"
         return None
 
@@ -119,8 +123,9 @@ def calculate_indicators():
     rsi_val = float(df_3m["rsi"].iloc[-1])
     
     # Volume Filter (1.2x Volume Avg)
-    vol_avg_val = float(latest_3m["vol_avg"]) if not pd.isna(latest_3m["vol_avg"]) else 1.0
-    has_volume_spike = float(latest_3m["volume"]) >= (1.2 * vol_avg_val)
+    vol_avg_val = float(latest_3m["vol_avg"]) if ("vol_avg" in latest_3m and not pd.isna(latest_3m["vol_avg"])) else 1.0
+    vol_val = float(latest_3m["volume"]) if "volume" in latest_3m else 0.0
+    has_volume_spike = vol_val >= (1.2 * vol_avg_val)
 
     # 3. SWING BREAKOUT LOGIC (Past 10 candles excluding live one)
     recent_candles = df_3m.iloc[-11:-1]
@@ -254,6 +259,6 @@ def home():
     })
 
 if __name__ == "__main__":
-    send_telegram("⚡ *Bot Fixed: Direct Candle Array Reversing & RSI Fixed!*")
+    send_telegram("⚡ *Bot Fixed: Dynamic Delta Column Mapping & Live RSI Running!*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
