@@ -1,6 +1,7 @@
 import os
 import requests
 import pandas as pd
+import numpy as np
 import threading
 import time
 from flask import Flask, jsonify
@@ -51,13 +52,19 @@ def get_candles(resolution="3m", limit=100):
         if res.get("success") and "result" in res:
             df = pd.DataFrame(res["result"])
             if not df.empty:
+                # 1. Sort by time ascending (Oldest to Newest)
                 if "time" in df.columns:
                     df = df.sort_values(by="time", ascending=True).reset_index(drop=True)
                 else:
                     df = df.iloc[::-1].reset_index(drop=True)
 
+                # 2. Convert string/object columns strictly to float
                 for col in ["close", "high", "low", "open", "volume"]:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors='coerce')
+
+                # Drop any invalid rows
+                df = df.dropna(subset=["close", "high", "low", "volume"]).reset_index(drop=True)
                 return df
         last_error = f"API Error: {res}"
     except Exception as e:
@@ -65,20 +72,22 @@ def get_candles(resolution="3m", limit=100):
         print(last_error)
     return None
 
-def calculate_rsi(series, period=14):
+def calculate_rsi(close_prices, period=14):
     try:
-        delta = series.diff()
-        gain = delta.clip(lower=0)
-        loss = -1 * delta.clip(upper=0)
+        delta = close_prices.diff()
+        gain = delta.where(delta > 0, 0.0)
+        loss = -delta.where(delta < 0, 0.0)
 
-        avg_gain = gain.ewm(span=period, adjust=False).mean()
-        avg_loss = loss.ewm(span=period, adjust=False).mean()
+        # Exponential moving average for RSI calculation
+        avg_gain = gain.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
+        avg_loss = loss.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
 
         rs = avg_gain / (avg_loss + 1e-10)
-        return 100 - (100 / (1 + rs))
+        rsi = 100 - (100 / (1 + rs))
+        return rsi.fillna(50.0)
     except Exception as e:
-        print(f"RSI Exception: {e}")
-        return pd.Series([50.0] * len(series))
+        print(f"RSI Calc Error: {e}")
+        return pd.Series([50.0] * len(close_prices))
 
 def calculate_indicators():
     global last_error
@@ -92,7 +101,7 @@ def calculate_indicators():
         last_error = f"Not enough candles: 30m={len(df_30m)}, 3m={len(df_3m)}"
         return None
 
-    # 1. 30M Trend Filter
+    # 1. 30M Trend Filter (EMA 21)
     df_30m["ema_21_30m"] = df_30m["close"].ewm(span=21, adjust=False).mean()
     close_30m = float(df_30m["close"].iloc[-1])
     ema_30m = float(df_30m["ema_21_30m"].iloc[-1])
@@ -102,8 +111,7 @@ def calculate_indicators():
 
     # 2. 3M Indicators
     df_3m["ema_21_3m"] = df_3m["close"].ewm(span=21, adjust=False).mean()
-    rsi_series = calculate_rsi(df_3m["close"], 14)
-    df_3m["rsi"] = rsi_series
+    df_3m["rsi"] = calculate_rsi(df_3m["close"], 14)
     df_3m["vol_avg"] = df_3m["volume"].rolling(window=20).mean()
 
     latest_3m = df_3m.iloc[-1]
@@ -111,29 +119,31 @@ def calculate_indicators():
     ema_21_val = float(latest_3m["ema_21_3m"])
     rsi_val = float(latest_3m["rsi"])
     
-    # Volume Filter
-    has_volume_spike = float(latest_3m["volume"]) >= (1.2 * float(latest_3m["vol_avg"]))
+    # 1.2x Volume Spike Filter
+    vol_avg_val = float(latest_3m["vol_avg"]) if not pd.isna(latest_3m["vol_avg"]) else 1.0
+    has_volume_spike = float(latest_3m["volume"]) >= (1.2 * vol_avg_val)
 
-    # 3. SWING BREAKOUT LOGIC
+    # 3. SWING BREAKOUT LOGIC (Last 10 candles excluding current live candle)
     recent_candles = df_3m.iloc[-11:-1]
     
-    had_pullback_up = any(recent_candles["high"] >= recent_candles["ema_21_3m"])
     swing_low = float(recent_candles["low"].min())
+    swing_high = float(recent_candles["high"].max())
+
+    had_pullback_up = any(recent_candles["high"] >= recent_candles["ema_21_3m"])
     sell_signal = bool(is_30m_downtrend and 
                        had_pullback_up and 
                        (current_price < swing_low) and 
                        (current_price < ema_21_val) and 
                        has_volume_spike and 
-                       (rsi_val < 50))
+                       (rsi_val < 50.0))
 
     had_pullback_down = any(recent_candles["low"] <= recent_candles["ema_21_3m"])
-    swing_high = float(recent_candles["high"].max())
     buy_signal = bool(is_30m_uptrend and 
                       had_pullback_down and 
                       (current_price > swing_high) and 
                       (current_price > ema_21_val) and 
                       has_volume_spike and 
-                      (rsi_val > 50))
+                      (rsi_val > 50.0))
 
     last_error = "None"
     return {
@@ -246,6 +256,6 @@ def home():
     })
 
 if __name__ == "__main__":
-    send_telegram("⚡ *Bot Fixed: RSI & Swing High/Low Structure Fully Standardized!*")
+    send_telegram("⚡ *Bot Updated: Pure Dynamic RSI & High/Low Parsing Live!*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
