@@ -46,7 +46,6 @@ def get_candles(resolution="3m", limit=100):
         res_seconds = 180 if resolution == "3m" else 1800
         start_time = current_time - (limit * res_seconds)
 
-        # Correct API format with required resolution string, start, and end
         url = f"{BASE_URL}/v2/history/candles?resolution={resolution}&symbol={SYMBOL}&start={start_time}&end={current_time}"
         res = requests.get(url, timeout=10).json()
         
@@ -55,15 +54,10 @@ def get_candles(resolution="3m", limit=100):
             if len(raw_data) > 0:
                 df = pd.DataFrame(raw_data)
                 
-                # Sort candles from oldest to newest by timestamp
-                time_col = "start" if "start" in df.columns else ("time" if "time" in df.columns else None)
-                if time_col:
-                    df[time_col] = pd.to_numeric(df[time_col], errors='coerce')
-                    df = df.sort_values(by=time_col, ascending=True).reset_index(drop=True)
-                else:
-                    df = df.iloc[::-1].reset_index(drop=True)
+                # REVERSE CHRONOLOGY FIX: Delta sends newest candle first, we force reverse it to Oldest -> Newest
+                df = df.iloc[::-1].reset_index(drop=True)
 
-                # Strictly convert numeric columns
+                # Convert numeric columns strictly
                 for col in ["close", "high", "low", "open", "volume"]:
                     if col in df.columns:
                         df[col] = pd.to_numeric(df[col], errors='coerce')
@@ -83,6 +77,7 @@ def calculate_rsi(close_series, period=14):
         gain = delta.clip(lower=0.0)
         loss = -1.0 * delta.clip(upper=0.0)
 
+        # Standard Wilder's RSI calculation
         avg_gain = gain.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
         avg_loss = loss.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
 
@@ -121,13 +116,13 @@ def calculate_indicators():
     latest_3m = df_3m.iloc[-1]
     current_price = float(latest_3m["close"])
     ema_21_val = float(latest_3m["ema_21_3m"])
-    rsi_val = float(latest_3m["rsi"].iloc[-1]) if isinstance(latest_3m["rsi"], pd.Series) else float(latest_3m["rsi"])
+    rsi_val = float(df_3m["rsi"].iloc[-1])
     
     # Volume Filter (1.2x Volume Avg)
     vol_avg_val = float(latest_3m["vol_avg"]) if not pd.isna(latest_3m["vol_avg"]) else 1.0
     has_volume_spike = float(latest_3m["volume"]) >= (1.2 * vol_avg_val)
 
-    # 3. SWING BREAKOUT LOGIC (Past 10 candles)
+    # 3. SWING BREAKOUT LOGIC (Past 10 candles excluding live one)
     recent_candles = df_3m.iloc[-11:-1]
     swing_low = float(recent_candles["low"].min())
     swing_high = float(recent_candles["high"].max())
@@ -259,6 +254,6 @@ def home():
     })
 
 if __name__ == "__main__":
-    send_telegram("⚡ *Bot Fixed: Correct Resolution (3m/30m) and Timestamp API Schema!*")
+    send_telegram("⚡ *Bot Fixed: Direct Candle Array Reversing & RSI Fixed!*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
