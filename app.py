@@ -41,17 +41,25 @@ def send_telegram(message):
 def get_candles(resolution="3m", limit=100):
     global last_error
     try:
-        url = f"{BASE_URL}/v2/history/candles?resolution={resolution}&symbol={SYMBOL}&limit={limit}"
+        current_time = int(time.time())
+        # resolution પ્રમાણે સેકન્ડ્સ ગણવી
+        res_seconds = 180 if resolution == "3m" else 1800
+        start_time = current_time - (limit * res_seconds)
+
+        url = f"{BASE_URL}/v2/history/candles?resolution={resolution}&symbol={SYMBOL}&start={start_time}&end={current_time}"
         res = requests.get(url, timeout=10).json()
+        
         if res.get("success") and "result" in res:
             df = pd.DataFrame(res["result"])
             if not df.empty:
+                # Chronological order સેટ કરવા માટે
+                df = df.sort_values(by="time").reset_index(drop=True)
                 for col in ["close", "high", "low", "open", "volume"]:
                     df[col] = df[col].astype(float)
                 return df
-        last_error = f"API success false or empty result: {res}"
+        last_error = f"API Error: {res}"
     except Exception as e:
-        last_error = f"Candle fetch exception ({resolution}): {e}"
+        last_error = f"Fetch exception ({resolution}): {e}"
         print(last_error)
     return None
 
@@ -226,6 +234,6 @@ def home():
     })
 
 if __name__ == "__main__":
-    send_telegram("⚡ *Bot Updated with Direct Fetching & Error Debugging!*")
+    send_telegram("⚡ *Bot Fixed with Correct Delta API Timeframe Parameters!*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
