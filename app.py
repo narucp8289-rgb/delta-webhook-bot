@@ -50,44 +50,49 @@ def get_candles(resolution="3m", limit=100):
         res = requests.get(url, timeout=10).json()
         
         if res.get("success") and "result" in res:
-            df = pd.DataFrame(res["result"])
-            if not df.empty:
-                # 1. Sort by time ascending (Oldest to Newest)
-                if "time" in df.columns:
-                    df = df.sort_values(by="time", ascending=True).reset_index(drop=True)
+            raw_data = res["result"]
+            if len(raw_data) > 0:
+                df = pd.DataFrame(raw_data)
+                
+                # 1. Timestamps Sorting (Oldest to Newest)
+                time_col = "start" if "start" in df.columns else ("time" if "time" in df.columns else None)
+                if time_col:
+                    df[time_col] = pd.to_numeric(df[time_col], errors='coerce')
+                    df = df.sort_values(by=time_col, ascending=True).reset_index(drop=True)
                 else:
                     df = df.iloc[::-1].reset_index(drop=True)
 
-                # 2. Convert string/object columns strictly to float
+                # 2. Strict Float Conversion
                 for col in ["close", "high", "low", "open", "volume"]:
                     if col in df.columns:
                         df[col] = pd.to_numeric(df[col], errors='coerce')
 
-                # Drop any invalid rows
+                # Clean invalid rows
                 df = df.dropna(subset=["close", "high", "low", "volume"]).reset_index(drop=True)
                 return df
+                
         last_error = f"API Error: {res}"
     except Exception as e:
         last_error = f"Fetch exception ({resolution}): {e}"
         print(last_error)
     return None
 
-def calculate_rsi(close_prices, period=14):
+def calculate_rsi(close_series, period=14):
     try:
-        delta = close_prices.diff()
-        gain = delta.where(delta > 0, 0.0)
-        loss = -delta.where(delta < 0, 0.0)
+        delta = close_series.diff()
+        gain = delta.clip(lower=0.0)
+        loss = -1.0 * delta.clip(upper=0.0)
 
-        # Exponential moving average for RSI calculation
-        avg_gain = gain.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
-        avg_loss = loss.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
+        # Standard RSI formula via EWM
+        avg_gain = gain.ewm(com=period - 1, min_periods=period, adjust=False).mean()
+        avg_loss = loss.ewm(com=period - 1, min_periods=period, adjust=False).mean()
 
         rs = avg_gain / (avg_loss + 1e-10)
-        rsi = 100 - (100 / (1 + rs))
-        return rsi.fillna(50.0)
+        rsi = 100.0 - (100.0 / (1.0 + rs))
+        return rsi
     except Exception as e:
-        print(f"RSI Calc Error: {e}")
-        return pd.Series([50.0] * len(close_prices))
+        print(f"RSI Calculation Error: {e}")
+        return pd.Series([50.0] * len(close_series))
 
 def calculate_indicators():
     global last_error
@@ -101,7 +106,7 @@ def calculate_indicators():
         last_error = f"Not enough candles: 30m={len(df_30m)}, 3m={len(df_3m)}"
         return None
 
-    # 1. 30M Trend Filter (EMA 21)
+    # 1. 30M Trend Filter
     df_30m["ema_21_30m"] = df_30m["close"].ewm(span=21, adjust=False).mean()
     close_30m = float(df_30m["close"].iloc[-1])
     ema_30m = float(df_30m["ema_21_30m"].iloc[-1])
@@ -117,15 +122,14 @@ def calculate_indicators():
     latest_3m = df_3m.iloc[-1]
     current_price = float(latest_3m["close"])
     ema_21_val = float(latest_3m["ema_21_3m"])
-    rsi_val = float(latest_3m["rsi"])
+    rsi_val = float(latest_3m["rsi"].iloc[-1]) if isinstance(latest_3m["rsi"], pd.Series) else float(latest_3m["rsi"])
     
-    # 1.2x Volume Spike Filter
+    # Volume Filter
     vol_avg_val = float(latest_3m["vol_avg"]) if not pd.isna(latest_3m["vol_avg"]) else 1.0
     has_volume_spike = float(latest_3m["volume"]) >= (1.2 * vol_avg_val)
 
-    # 3. SWING BREAKOUT LOGIC (Last 10 candles excluding current live candle)
+    # 3. SWING BREAKOUT LOGIC (Previous 10 candles excluding live candle)
     recent_candles = df_3m.iloc[-11:-1]
-    
     swing_low = float(recent_candles["low"].min())
     swing_high = float(recent_candles["high"].max())
 
@@ -256,6 +260,6 @@ def home():
     })
 
 if __name__ == "__main__":
-    send_telegram("⚡ *Bot Updated: Pure Dynamic RSI & High/Low Parsing Live!*")
+    send_telegram("⚡ *Bot Fixed: Delta API Candle Sorting & RSI Active!*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
