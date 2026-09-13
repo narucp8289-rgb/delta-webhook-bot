@@ -24,7 +24,6 @@ active_position = None
 
 # ================= KEEP-ALIVE (AUTOMATIC ANTI-SLEEP) =================
 def keep_alive():
-    """Render પર સર્વર સ્લીપ ન થાય તે માટે દર 5 મિનિટે ઓટોમેટિક પિંગ કરશે"""
     time.sleep(10)
     while True:
         try:
@@ -67,6 +66,13 @@ def get_candles(resolution="3m", limit=100):
         print(f"Candle fetch error ({resolution}): {e}")
     return None
 
+def calculate_rsi(series, period=14):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
 def calculate_indicators():
     df_30m = get_candles(resolution="30m", limit=100) # 30M Trend Filter
     df_3m = get_candles(resolution="3m", limit=100)   # 3M Execution Chart
@@ -79,29 +85,53 @@ def calculate_indicators():
     is_30m_uptrend = float(df_30m["close"].iloc[-1]) > float(df_30m["ema_200_30m"].iloc[-1])
     is_30m_downtrend = float(df_30m["close"].iloc[-1]) < float(df_30m["ema_200_30m"].iloc[-1])
 
-    # 2. 3M Execution Chart (21 EMA Pullback)
+    # 2. 3M Indicators (21 EMA, Volume Spike, RSI)
     df_3m["ema_21_3m"] = df_3m["close"].ewm(span=21, adjust=False).mean()
-    
-    latest_3m = df_3m.iloc[-1]
-    prev_3m = df_3m.iloc[-2]
+    df_3m["rsi"] = calculate_rsi(df_3m["close"], 14)
+    df_3m["vol_avg"] = df_3m["volume"].rolling(window=20).mean()
 
+    latest_3m = df_3m.iloc[-1]
     current_price = float(latest_3m["close"])
     ema_21_val = float(latest_3m["ema_21_3m"])
+    rsi_val = float(latest_3m["rsi"])
+    
+    # Volume Filter (1.5x of 20-period average)
+    has_volume_spike = float(latest_3m["volume"]) >= (1.5 * float(latest_3m["vol_avg"]))
 
-    # Pullback Logic:
-    # BUY: 30M Uptrend + 3M Price touches/crosses above 21 EMA (Pullback Completion)
-    buy_pullback = is_30m_uptrend and (prev_3m["low"] <= prev_3m["ema_21_3m"]) and (latest_3m["close"] > ema_21_val)
+    # 3. SWING BREAKOUT LOGIC (છેલ્લી 10 કેન્ડલ્સ)
+    recent_candles = df_3m.iloc[-11:-1]
+    
+    # SELL: 30M Downtrend + EMA Pullback + Swing Low Breakout + Volume Spike + RSI < 45
+    had_pullback_up = any(recent_candles["high"] >= recent_candles["ema_21_3m"])
+    swing_low = recent_candles["low"].min()
+    sell_signal = (is_30m_downtrend and 
+                   had_pullback_up and 
+                   (current_price < swing_low) and 
+                   (current_price < ema_21_val) and 
+                   has_volume_spike and 
+                   (rsi_val < 45))
 
-    # SELL: 30M Downtrend + 3M Price touches/crosses below 21 EMA (Pullback Completion)
-    sell_pullback = is_30m_downtrend and (prev_3m["high"] >= prev_3m["ema_21_3m"]) and (latest_3m["close"] < ema_21_val)
+    # BUY: 30M Uptrend + EMA Pullback + Swing High Breakout + Volume Spike + RSI > 55
+    had_pullback_down = any(recent_candles["low"] <= recent_candles["ema_21_3m"])
+    swing_high = recent_candles["high"].max()
+    buy_signal = (is_30m_uptrend and 
+                  had_pullback_down and 
+                  (current_price > swing_high) and 
+                  (current_price > ema_21_val) and 
+                  has_volume_spike and 
+                  (rsi_val > 55))
 
     return {
         "price": current_price,
         "ema_21_3m": ema_21_val,
+        "rsi": rsi_val,
+        "volume_spike": has_volume_spike,
         "is_30m_uptrend": is_30m_uptrend,
         "is_30m_downtrend": is_30m_downtrend,
-        "buy_signal": buy_pullback,
-        "sell_signal": sell_pullback
+        "swing_low": swing_low,
+        "swing_high": swing_high,
+        "buy_signal": buy_signal,
+        "sell_signal": sell_signal
     }
 
 # ================= TRADE MANAGEMENT =================
@@ -148,13 +178,13 @@ def execute_trade(side, price):
     }
 
     emoji = "🚀" if side == "BUY" else "🔻"
-    msg = (f"{emoji} *NEW 3M EMA 21 PULLBACK TRADE EXECUTED!*\n\n"
+    msg = (f"{emoji} *HIGH CONFIRMATION SWING BREAKOUT TRADE!*\n\n"
            f"*Symbol:* {SYMBOL}\n"
            f"*Side:* {side}\n"
            f"*Entry Price:* ${price}\n"
            f"*Stop Loss:* ${sl} (-${SL_AMOUNT})\n"
            f"*Take Profit:* ${tp} (+${TP_AMOUNT})\n"
-           f"*Strategy:* 30M Trend Filter + 3M EMA 21 Pullback")
+           f"*Filters:* Volume Spike (1.5x) + RSI Confirmation")
     
     print(f"Executing {side} Trade at {price}")
     send_telegram(msg)
@@ -180,10 +210,14 @@ def home():
 
         return jsonify({
             "status": "running",
-            "mode": "30M Trend + 3M EMA 21 Pullback",
+            "mode": "30M Trend + EMA Pullback + Volume/RSI Swing Breakdown",
             "price": price,
             "ema_21_3m": ema_21,
+            "rsi": data["rsi"],
+            "volume_spike": data["volume_spike"],
             "30m_uptrend": is_30m_up,
+            "swing_low": data["swing_low"],
+            "swing_high": data["swing_high"],
             "sl_setting": f"${SL_AMOUNT}",
             "tp_setting": f"${TP_AMOUNT}",
             "active_trade": active_position
@@ -191,6 +225,6 @@ def home():
     return jsonify({"status": "error fetching data"})
 
 if __name__ == "__main__":
-    send_telegram("⚡ *30M Trend + 3M EMA 21 Pullback Bot Started!*")
+    send_telegram("⚡ *High-Confirmation Swing Breakdown Bot Deployed!*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
