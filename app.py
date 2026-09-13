@@ -39,11 +39,15 @@ def send_telegram(message):
         print(f"Telegram Error: {e}")
 
 # ================= TECHNICAL ANALYSIS =================
-def get_candles(resolution="3", limit=100):
+def get_candles(resolution="3m", limit=100):
     global last_error
     try:
-        # Delta API format: resolution='3' for 3m, '30' for 30m
-        url = f"{BASE_URL}/v2/history/candles?resolution={resolution}&symbol={SYMBOL}"
+        current_time = int(time.time())
+        res_seconds = 180 if resolution == "3m" else 1800
+        start_time = current_time - (limit * res_seconds)
+
+        # Correct API format with required resolution string, start, and end
+        url = f"{BASE_URL}/v2/history/candles?resolution={resolution}&symbol={SYMBOL}&start={start_time}&end={current_time}"
         res = requests.get(url, timeout=10).json()
         
         if res.get("success") and "result" in res:
@@ -51,15 +55,15 @@ def get_candles(resolution="3", limit=100):
             if len(raw_data) > 0:
                 df = pd.DataFrame(raw_data)
                 
-                # Sort by time ascending (Oldest to Newest)
-                time_col = "time" if "time" in df.columns else ("start" if "start" in df.columns else None)
+                # Sort candles from oldest to newest by timestamp
+                time_col = "start" if "start" in df.columns else ("time" if "time" in df.columns else None)
                 if time_col:
                     df[time_col] = pd.to_numeric(df[time_col], errors='coerce')
                     df = df.sort_values(by=time_col, ascending=True).reset_index(drop=True)
                 else:
                     df = df.iloc[::-1].reset_index(drop=True)
 
-                # Strict Numeric Float Conversion
+                # Strictly convert numeric columns
                 for col in ["close", "high", "low", "open", "volume"]:
                     if col in df.columns:
                         df[col] = pd.to_numeric(df[col], errors='coerce')
@@ -91,8 +95,8 @@ def calculate_rsi(close_series, period=14):
 
 def calculate_indicators():
     global last_error
-    df_30m = get_candles(resolution="30", limit=100)
-    df_3m = get_candles(resolution="3", limit=100)
+    df_30m = get_candles(resolution="30m", limit=100)
+    df_3m = get_candles(resolution="3m", limit=100)
     
     if df_30m is None or df_3m is None:
         return None
@@ -117,7 +121,7 @@ def calculate_indicators():
     latest_3m = df_3m.iloc[-1]
     current_price = float(latest_3m["close"])
     ema_21_val = float(latest_3m["ema_21_3m"])
-    rsi_val = float(latest_3m["rsi"])
+    rsi_val = float(latest_3m["rsi"].iloc[-1]) if isinstance(latest_3m["rsi"], pd.Series) else float(latest_3m["rsi"])
     
     # Volume Filter (1.2x Volume Avg)
     vol_avg_val = float(latest_3m["vol_avg"]) if not pd.isna(latest_3m["vol_avg"]) else 1.0
@@ -255,6 +259,6 @@ def home():
     })
 
 if __name__ == "__main__":
-    send_telegram("⚡ *Bot Fixed: Direct Resolution Endpoints Working!*")
+    send_telegram("⚡ *Bot Fixed: Correct Resolution (3m/30m) and Timestamp API Schema!*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
