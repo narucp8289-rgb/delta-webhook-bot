@@ -39,14 +39,11 @@ def send_telegram(message):
         print(f"Telegram Error: {e}")
 
 # ================= TECHNICAL ANALYSIS =================
-def get_candles(resolution="3m", limit=100):
+def get_candles(resolution="3", limit=100):
     global last_error
     try:
-        current_time = int(time.time())
-        res_seconds = 180 if resolution == "3m" else 1800
-        start_time = current_time - (limit * res_seconds)
-
-        url = f"{BASE_URL}/v2/history/candles?resolution={resolution}&symbol={SYMBOL}&start={start_time}&end={current_time}"
+        # Delta API format: resolution='3' for 3m, '30' for 30m
+        url = f"{BASE_URL}/v2/history/candles?resolution={resolution}&symbol={SYMBOL}"
         res = requests.get(url, timeout=10).json()
         
         if res.get("success") and "result" in res:
@@ -54,20 +51,19 @@ def get_candles(resolution="3m", limit=100):
             if len(raw_data) > 0:
                 df = pd.DataFrame(raw_data)
                 
-                # 1. Timestamps Sorting (Oldest to Newest)
-                time_col = "start" if "start" in df.columns else ("time" if "time" in df.columns else None)
+                # Sort by time ascending (Oldest to Newest)
+                time_col = "time" if "time" in df.columns else ("start" if "start" in df.columns else None)
                 if time_col:
                     df[time_col] = pd.to_numeric(df[time_col], errors='coerce')
                     df = df.sort_values(by=time_col, ascending=True).reset_index(drop=True)
                 else:
                     df = df.iloc[::-1].reset_index(drop=True)
 
-                # 2. Strict Float Conversion
+                # Strict Numeric Float Conversion
                 for col in ["close", "high", "low", "open", "volume"]:
                     if col in df.columns:
                         df[col] = pd.to_numeric(df[col], errors='coerce')
 
-                # Clean invalid rows
                 df = df.dropna(subset=["close", "high", "low", "volume"]).reset_index(drop=True)
                 return df
                 
@@ -83,30 +79,29 @@ def calculate_rsi(close_series, period=14):
         gain = delta.clip(lower=0.0)
         loss = -1.0 * delta.clip(upper=0.0)
 
-        # Standard RSI formula via EWM
-        avg_gain = gain.ewm(com=period - 1, min_periods=period, adjust=False).mean()
-        avg_loss = loss.ewm(com=period - 1, min_periods=period, adjust=False).mean()
+        avg_gain = gain.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
+        avg_loss = loss.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
 
         rs = avg_gain / (avg_loss + 1e-10)
         rsi = 100.0 - (100.0 / (1.0 + rs))
         return rsi
     except Exception as e:
-        print(f"RSI Calculation Error: {e}")
+        print(f"RSI Calc Error: {e}")
         return pd.Series([50.0] * len(close_series))
 
 def calculate_indicators():
     global last_error
-    df_30m = get_candles(resolution="30m", limit=100)
-    df_3m = get_candles(resolution="3m", limit=100)
+    df_30m = get_candles(resolution="30", limit=100)
+    df_3m = get_candles(resolution="3", limit=100)
     
     if df_30m is None or df_3m is None:
         return None
 
-    if len(df_30m) < 30 or len(df_3m) < 30:
+    if len(df_30m) < 25 or len(df_3m) < 25:
         last_error = f"Not enough candles: 30m={len(df_30m)}, 3m={len(df_3m)}"
         return None
 
-    # 1. 30M Trend Filter
+    # 1. 30M Trend Filter (EMA 21)
     df_30m["ema_21_30m"] = df_30m["close"].ewm(span=21, adjust=False).mean()
     close_30m = float(df_30m["close"].iloc[-1])
     ema_30m = float(df_30m["ema_21_30m"].iloc[-1])
@@ -122,13 +117,13 @@ def calculate_indicators():
     latest_3m = df_3m.iloc[-1]
     current_price = float(latest_3m["close"])
     ema_21_val = float(latest_3m["ema_21_3m"])
-    rsi_val = float(latest_3m["rsi"].iloc[-1]) if isinstance(latest_3m["rsi"], pd.Series) else float(latest_3m["rsi"])
+    rsi_val = float(latest_3m["rsi"])
     
-    # Volume Filter
+    # Volume Filter (1.2x Volume Avg)
     vol_avg_val = float(latest_3m["vol_avg"]) if not pd.isna(latest_3m["vol_avg"]) else 1.0
     has_volume_spike = float(latest_3m["volume"]) >= (1.2 * vol_avg_val)
 
-    # 3. SWING BREAKOUT LOGIC (Previous 10 candles excluding live candle)
+    # 3. SWING BREAKOUT LOGIC (Past 10 candles)
     recent_candles = df_3m.iloc[-11:-1]
     swing_low = float(recent_candles["low"].min())
     swing_high = float(recent_candles["high"].max())
@@ -260,6 +255,6 @@ def home():
     })
 
 if __name__ == "__main__":
-    send_telegram("⚡ *Bot Fixed: Delta API Candle Sorting & RSI Active!*")
+    send_telegram("⚡ *Bot Fixed: Direct Resolution Endpoints Working!*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
