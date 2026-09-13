@@ -131,21 +131,28 @@ def calculate_indicators():
     vol_avg_val = float(latest_3m["vol_avg"])
     has_volume_spike = vol_val >= (1.2 * vol_avg_val)
 
-    # 3. SWING & PULLBACK LOGIC (Past 10 candles)
+    # 3. SWING & PULLBACK LOGIC (Past 10 Closed Candles)
     recent_candles = df_3m.iloc[-11:-1]
 
-    # Dynamic Swing Levels (Filtered by EMA side)
-    candles_above_ema = recent_candles[recent_candles["high"] > recent_candles["ema_21_3m"]]
-    swing_high = float(candles_above_ema["high"].max()) if not candles_above_ema.empty else float(recent_candles["high"].max())
-
+    # SELL માટે: EMA ની નીચે હોય તેવી કેન્ડલ્સમાંથી જ નીચો પોઈન્ટ (Swing Low) પકડવો
     candles_below_ema = recent_candles[recent_candles["low"] < recent_candles["ema_21_3m"]]
-    swing_low = float(candles_below_ema["low"].min()) if not candles_below_ema.empty else float(recent_candles["low"].min())
+    if not candles_below_ema.empty:
+        swing_low = float(candles_below_ema["low"].min())
+    else:
+        swing_low = float(recent_candles["low"].min())
+
+    # BUY માટે: EMA ની ઉપર હોય તેવી કેન્ડલ્સમાંથી જ ઊંચો પોઈન્ટ (Swing High) પકડવો
+    candles_above_ema = recent_candles[recent_candles["high"] > recent_candles["ema_21_3m"]]
+    if not candles_above_ema.empty:
+        swing_high = float(candles_above_ema["high"].max())
+    else:
+        swing_high = float(recent_candles["high"].max())
 
     # STRICT PULLBACK: Price must cross OVER EMA for Sell, and CROSS BELOW EMA for Buy
     had_pullback_up = any(recent_candles["high"] > recent_candles["ema_21_3m"])
     had_pullback_down = any(recent_candles["low"] < recent_candles["ema_21_3m"])
 
-    # SELL Signal (EMA ઉપરથી પુલબેક લઈને નીચેનો સ્વિંગ લો બ્રેક કરે)
+    # SELL Signal (EMA ઉપર જઈને પુલબેક લે અને EMA ની નીચેનો સ્વિંગ લો તોડે)
     sell_signal = bool(is_30m_downtrend and 
                        had_pullback_up and 
                        (current_price < swing_low) and 
@@ -153,7 +160,7 @@ def calculate_indicators():
                        has_volume_spike and 
                        (rsi_val < 50.0))
 
-    # BUY Signal (EMA નીચેથી પુલબેક લઈને ઉપરનો સ્વિંગ હાઈ બ્રેક કરે)
+    # BUY Signal (EMA નીચે જઈને પુલબેક લે અને EMA ની ઉપરનો સ્વિંગ હાઈ તોડે)
     buy_signal = bool(is_30m_uptrend and 
                       had_pullback_down and 
                       (current_price > swing_high) and 
@@ -272,6 +279,6 @@ def home():
     })
 
 if __name__ == "__main__":
-    send_telegram("⚡ *Bot Updated: EMA Cross-Over Pullback & Dynamic Swing Filters Applied!*")
+    send_telegram("⚡ *Bot Updated: Final Swing Low & EMA Cross-Over Logic Applied!*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
