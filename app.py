@@ -21,23 +21,7 @@ TP_AMOUNT = 30.0
 
 # Active Trade Tracker State
 active_position = None
-
-# ================= KEEP-ALIVE (AUTOMATIC ANTI-SLEEP) =================
-def keep_alive():
-    time.sleep(10)
-    while True:
-        try:
-            render_url = os.environ.get("RENDER_EXTERNAL_URL")
-            if render_url:
-                requests.get(render_url, timeout=10)
-                print("⚡ Keep-Alive Ping Sent Successfully!")
-            else:
-                requests.get("http://127.0.0.1:10000", timeout=5)
-        except Exception as e:
-            print(f"Keep-Alive Ping Note: {e}")
-        time.sleep(300)
-
-threading.Thread(target=keep_alive, daemon=True).start()
+latest_market_data = {}
 
 # ================= TELEGRAM FUNCTIONS =================
 def send_telegram(message):
@@ -80,7 +64,7 @@ def calculate_indicators():
     if df_30m is None or df_3m is None or len(df_30m) < 30 or len(df_3m) < 30:
         return None
 
-    # 1. 30M Higher Timeframe Trend (21 EMA Filter)
+    # 1. 30M Trend (21 EMA Filter)
     df_30m["ema_21_30m"] = df_30m["close"].ewm(span=21, adjust=False).mean()
     is_30m_uptrend = float(df_30m["close"].iloc[-1]) > float(df_30m["ema_21_30m"].iloc[-1])
     is_30m_downtrend = float(df_30m["close"].iloc[-1]) < float(df_30m["ema_21_30m"].iloc[-1])
@@ -95,13 +79,13 @@ def calculate_indicators():
     ema_21_val = float(latest_3m["ema_21_3m"])
     rsi_val = float(latest_3m["rsi"])
     
-    # Relaxed Volume Filter (1.2x of 20-period average)
+    # Relaxed Volume Filter (1.2x)
     has_volume_spike = float(latest_3m["volume"]) >= (1.2 * float(latest_3m["vol_avg"]))
 
-    # 3. SWING BREAKOUT LOGIC (છેલ્લી 10 કેન્ડલ્સ)
+    # 3. SWING BREAKOUT LOGIC
     recent_candles = df_3m.iloc[-11:-1]
     
-    # SELL: 30M Downtrend (21 EMA) + 3M EMA Pullback Up + Swing Low Breakdown + Volume Spike (1.2x) + RSI < 50
+    # SELL Signal
     had_pullback_up = any(recent_candles["high"] >= recent_candles["ema_21_3m"])
     swing_low = recent_candles["low"].min()
     sell_signal = (is_30m_downtrend and 
@@ -111,7 +95,7 @@ def calculate_indicators():
                    has_volume_spike and 
                    (rsi_val < 50))
 
-    # BUY: 30M Uptrend (21 EMA) + 3M EMA Pullback Down + Swing High Breakout + Volume Spike (1.2x) + RSI > 50
+    # BUY Signal
     had_pullback_down = any(recent_candles["low"] <= recent_candles["ema_21_3m"])
     swing_high = recent_candles["high"].max()
     buy_signal = (is_30m_uptrend and 
@@ -189,42 +173,60 @@ def execute_trade(side, price):
     print(f"Executing {side} Trade at {price}")
     send_telegram(msg)
 
+# ================= BACKGROUND CONTINUOUS MONITORING LOOP =================
+def trading_bot_loop():
+    global latest_market_data
+    time.sleep(5)
+    while True:
+        try:
+            data = calculate_indicators()
+            if data:
+                latest_market_data = data
+                price = data["price"]
+                buy_signal = data["buy_signal"]
+                sell_signal = data["sell_signal"]
+
+                check_active_position(price)
+
+                if active_position is None:
+                    if buy_signal:
+                        execute_trade("BUY", price)
+                    elif sell_signal:
+                        execute_trade("SELL", price)
+        except Exception as e:
+            print(f"Loop Error: {e}")
+        
+        time.sleep(10) # દર 10 સેકન્ડે માર્કેટ સ્કેન થશે
+
+threading.Thread(target=trading_bot_loop, daemon=True).start()
+
+# ================= KEEP-ALIVE (ANTI-SLEEP) =================
+def keep_alive():
+    time.sleep(10)
+    while True:
+        try:
+            render_url = os.environ.get("RENDER_EXTERNAL_URL")
+            if render_url:
+                requests.get(render_url, timeout=10)
+            else:
+                requests.get("http://127.0.0.1:10000", timeout=5)
+        except Exception as e:
+            pass
+        time.sleep(240)
+
+threading.Thread(target=keep_alive, daemon=True).start()
+
 # ================= FLASK SERVER ROUTES =================
 @app.route('/')
 def home():
-    data = calculate_indicators()
-    if data:
-        price = data["price"]
-        ema_21 = data["ema_21_3m"]
-        is_30m_up = data["is_30m_uptrend"]
-        buy_signal = data["buy_signal"]
-        sell_signal = data["sell_signal"]
-
-        check_active_position(price)
-
-        if active_position is None:
-            if buy_signal:
-                execute_trade("BUY", price)
-            elif sell_signal:
-                execute_trade("SELL", price)
-
-        return jsonify({
-            "status": "running",
-            "mode": "Optimized Filters (Volume 1.2x & RSI 50)",
-            "price": price,
-            "ema_21_3m": ema_21,
-            "rsi": data["rsi"],
-            "volume_spike": data["volume_spike"],
-            "30m_uptrend": is_30m_up,
-            "swing_low": data["swing_low"],
-            "swing_high": data["swing_high"],
-            "sl_setting": f"${SL_AMOUNT}",
-            "tp_setting": f"${TP_AMOUNT}",
-            "active_trade": active_position
-        })
-    return jsonify({"status": "error fetching data"})
+    return jsonify({
+        "status": "running",
+        "mode": "Continuous 10s Scanner (Volume 1.2x & RSI 50)",
+        "market_data": latest_market_data,
+        "active_trade": active_position
+    })
 
 if __name__ == "__main__":
-    send_telegram("⚡ *Bot Updated with Smooth Volume (1.2x) & RSI (<50) Filters!*")
+    send_telegram("⚡ *Bot Updated with 24/7 Auto-Scanner Loop!*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
