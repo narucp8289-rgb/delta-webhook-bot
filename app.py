@@ -9,7 +9,6 @@ from flask import Flask, jsonify
 app = Flask(__name__)
 
 # ================= CONFIGURATION =================
-# OKX Public API (Works globally without geo-restrictions on cloud servers)
 OKX_URL = "https://www.okx.com/api/v5/market/candles"
 SYMBOL = "ETH-USDT"
 
@@ -43,13 +42,11 @@ def send_telegram(message):
 def get_candles(bar="3m", limit=100):
     global last_error
     try:
-        # OKX timeframe notation: 3m, 30m
         params = {
             "instId": SYMBOL,
             "bar": bar,
             "limit": limit
         }
-        
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
         }
@@ -60,17 +57,14 @@ def get_candles(bar="3m", limit=100):
         if res.get("code") == "0" and "data" in res:
             raw_data = res["data"]
             if len(raw_data) > 0:
-                # OKX Format: [ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm]
                 df = pd.DataFrame(raw_data, columns=[
                     "ts", "open", "high", "low", "close", "volume", 
                     "volCcy", "volCcyQuote", "confirm"
                 ])
 
-                # Convert numeric types explicitly
                 for col in ["close", "high", "low", "open", "volume"]:
                     df[col] = pd.to_numeric(df[col], errors='coerce')
 
-                # OKX returns latest candle first -> reverse so oldest is at index 0
                 df = df.iloc[::-1].reset_index(drop=True)
                 df = df.dropna(subset=["close", "high", "low", "volume"]).reset_index(drop=True)
                 return df
@@ -132,17 +126,26 @@ def calculate_indicators():
     ema_21_val = float(latest_3m["ema_21_3m"])
     rsi_val = float(df_3m["rsi"].iloc[-1])
     
-    # Volume Filter Check (1.2x 20-period volume average)
+    # Volume Filter
     vol_val = float(latest_3m["volume"])
     vol_avg_val = float(latest_3m["vol_avg"])
     has_volume_spike = vol_val >= (1.2 * vol_avg_val)
 
-    # 3. SWING BREAKOUT LOGIC (Past 10 candles excluding live one)
+    # 3. SWING & PULLBACK LOGIC (Past 10 candles)
     recent_candles = df_3m.iloc[-11:-1]
-    swing_low = float(recent_candles["low"].min())
-    swing_high = float(recent_candles["high"].max())
 
-    had_pullback_up = any(recent_candles["high"] >= recent_candles["ema_21_3m"])
+    # Dynamic Swing Levels (Filtered by EMA side)
+    candles_above_ema = recent_candles[recent_candles["high"] > recent_candles["ema_21_3m"]]
+    swing_high = float(candles_above_ema["high"].max()) if not candles_above_ema.empty else float(recent_candles["high"].max())
+
+    candles_below_ema = recent_candles[recent_candles["low"] < recent_candles["ema_21_3m"]]
+    swing_low = float(candles_below_ema["low"].min()) if not candles_below_ema.empty else float(recent_candles["low"].min())
+
+    # STRICT PULLBACK: Price must cross OVER EMA for Sell, and CROSS BELOW EMA for Buy
+    had_pullback_up = any(recent_candles["high"] > recent_candles["ema_21_3m"])
+    had_pullback_down = any(recent_candles["low"] < recent_candles["ema_21_3m"])
+
+    # SELL Signal (EMA ઉપરથી પુલબેક લઈને નીચેનો સ્વિંગ લો બ્રેક કરે)
     sell_signal = bool(is_30m_downtrend and 
                        had_pullback_up and 
                        (current_price < swing_low) and 
@@ -150,7 +153,7 @@ def calculate_indicators():
                        has_volume_spike and 
                        (rsi_val < 50.0))
 
-    had_pullback_down = any(recent_candles["low"] <= recent_candles["ema_21_3m"])
+    # BUY Signal (EMA નીચેથી પુલબેક લઈને ઉપરનો સ્વિંગ હાઈ બ્રેક કરે)
     buy_signal = bool(is_30m_uptrend and 
                       had_pullback_down and 
                       (current_price > swing_high) and 
@@ -222,7 +225,7 @@ def execute_trade(side, price):
            f"*Entry Price:* ${price}\n"
            f"*Stop Loss:* ${sl} (-${SL_AMOUNT})\n"
            f"*Take Profit:* ${tp} (+${TP_AMOUNT})\n"
-           f"*Strategy:* 30M (21 EMA) + 3M Swing Breakdown (Volume 1.2x + RSI 50)")
+           f"*Strategy:* 30M Trend + 3M EMA Crossover Pullback & Swing Breakout")
     
     send_telegram(msg)
 
@@ -269,6 +272,6 @@ def home():
     })
 
 if __name__ == "__main__":
-    send_telegram("⚡ *Bot Fixed: Switched to OKX Public API - No Location Restriction!*")
+    send_telegram("⚡ *Bot Updated: EMA Cross-Over Pullback & Dynamic Swing Filters Applied!*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
