@@ -77,13 +77,13 @@ def calculate_indicators():
     df_30m = get_candles(resolution="30m", limit=100) # 30M Trend Filter
     df_3m = get_candles(resolution="3m", limit=100)   # 3M Execution Chart
     
-    if df_30m is None or df_3m is None or len(df_30m) < 50 or len(df_3m) < 50:
+    if df_30m is None or df_3m is None or len(df_30m) < 30 or len(df_3m) < 30:
         return None
 
-    # 1. 30M Higher Timeframe Trend (200 EMA Filter)
-    df_30m["ema_200_30m"] = df_30m["close"].ewm(span=200, adjust=False).mean()
-    is_30m_uptrend = float(df_30m["close"].iloc[-1]) > float(df_30m["ema_200_30m"].iloc[-1])
-    is_30m_downtrend = float(df_30m["close"].iloc[-1]) < float(df_30m["ema_200_30m"].iloc[-1])
+    # 1. 30M Higher Timeframe Trend (21 EMA Filter)
+    df_30m["ema_21_30m"] = df_30m["close"].ewm(span=21, adjust=False).mean()
+    is_30m_uptrend = float(df_30m["close"].iloc[-1]) > float(df_30m["ema_21_30m"].iloc[-1])
+    is_30m_downtrend = float(df_30m["close"].iloc[-1]) < float(df_30m["ema_21_30m"].iloc[-1])
 
     # 2. 3M Indicators (21 EMA, Volume Spike, RSI)
     df_3m["ema_21_3m"] = df_3m["close"].ewm(span=21, adjust=False).mean()
@@ -101,7 +101,7 @@ def calculate_indicators():
     # 3. SWING BREAKOUT LOGIC (છેલ્લી 10 કેન્ડલ્સ)
     recent_candles = df_3m.iloc[-11:-1]
     
-    # SELL: 30M Downtrend + EMA Pullback + Swing Low Breakout + Volume Spike + RSI < 45
+    # SELL: 30M Downtrend (21 EMA) + 3M EMA Pullback Up + Swing Low Breakdown + Volume Spike + RSI < 45
     had_pullback_up = any(recent_candles["high"] >= recent_candles["ema_21_3m"])
     swing_low = recent_candles["low"].min()
     sell_signal = (is_30m_downtrend and 
@@ -111,7 +111,7 @@ def calculate_indicators():
                    has_volume_spike and 
                    (rsi_val < 45))
 
-    # BUY: 30M Uptrend + EMA Pullback + Swing High Breakout + Volume Spike + RSI > 55
+    # BUY: 30M Uptrend (21 EMA) + 3M EMA Pullback Down + Swing High Breakout + Volume Spike + RSI > 55
     had_pullback_down = any(recent_candles["low"] <= recent_candles["ema_21_3m"])
     swing_high = recent_candles["high"].max()
     buy_signal = (is_30m_uptrend and 
@@ -178,13 +178,13 @@ def execute_trade(side, price):
     }
 
     emoji = "🚀" if side == "BUY" else "🔻"
-    msg = (f"{emoji} *HIGH CONFIRMATION SWING BREAKOUT TRADE!*\n\n"
+    msg = (f"{emoji} *NEW SWING BREAKOUT TRADE EXECUTED!*\n\n"
            f"*Symbol:* {SYMBOL}\n"
            f"*Side:* {side}\n"
            f"*Entry Price:* ${price}\n"
            f"*Stop Loss:* ${sl} (-${SL_AMOUNT})\n"
            f"*Take Profit:* ${tp} (+${TP_AMOUNT})\n"
-           f"*Filters:* Volume Spike (1.5x) + RSI Confirmation")
+           f"*Strategy:* 30M (21 EMA) + 3M Swing Breakdown + Volume Spike + RSI")
     
     print(f"Executing {side} Trade at {price}")
     send_telegram(msg)
@@ -210,7 +210,7 @@ def home():
 
         return jsonify({
             "status": "running",
-            "mode": "30M Trend + EMA Pullback + Volume/RSI Swing Breakdown",
+            "mode": "30M Trend (21 EMA) + 3M Swing Breakdown",
             "price": price,
             "ema_21_3m": ema_21,
             "rsi": data["rsi"],
@@ -225,6 +225,6 @@ def home():
     return jsonify({"status": "error fetching data"})
 
 if __name__ == "__main__":
-    send_telegram("⚡ *High-Confirmation Swing Breakdown Bot Deployed!*")
+    send_telegram("⚡ *30M 21 EMA Trend + 3M Swing Breakdown Bot Updated!*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
