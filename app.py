@@ -9,8 +9,9 @@ from flask import Flask, jsonify
 app = Flask(__name__)
 
 # ================= CONFIGURATION =================
-BASE_URL = "https://api.delta.exchange"
-SYMBOL = "ETHUSD"
+# Reliable Public Market Data Endpoint for ETHUSD / ETHUSDT
+BINANCE_URL = "https://api.binance.com/api/v3/klines"
+SYMBOL = "ETHUSDT"
 
 # Telegram Configuration
 TELEGRAM_TOKEN = "8682624980:AAEBi3mlG6dTnG0DOmq5nJ50HsSLjU0FrFo"
@@ -39,58 +40,36 @@ def send_telegram(message):
         print(f"Telegram Error: {e}")
 
 # ================= TECHNICAL ANALYSIS =================
-def get_candles(resolution="3m", limit=100):
+def get_candles(interval="3m", limit=100):
     global last_error
     try:
-        current_time = int(time.time())
-        res_seconds = 180 if resolution == "3m" else 1800
-        start_time = current_time - (limit * res_seconds)
-
-        url = f"{BASE_URL}/v2/history/candles"
         params = {
             "symbol": SYMBOL,
-            "resolution": resolution,
-            "start": start_time,
-            "end": current_time
+            "interval": interval,
+            "limit": limit
         }
         
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(BINANCE_URL, params=params, timeout=10)
         res = response.json()
         
-        if res.get("success") and "result" in res:
-            raw_data = res["result"]
-            if isinstance(raw_data, list) and len(raw_data) > 0:
-                df = pd.DataFrame(raw_data)
+        if isinstance(res, list) and len(res) > 0:
+            # Kline Structure: [Open time, Open, High, Low, Close, Volume, ...]
+            df = pd.DataFrame(res, columns=[
+                "open_time", "open", "high", "low", "close", "volume",
+                "close_time", "quote_asset_volume", "number_of_trades",
+                "taker_buy_base_asset_volume", "taker_buy_quote_asset_volume", "ignore"
+            ])
 
-                # Standardize Column Names
-                col_map = {'c': 'close', 'h': 'high', 'l': 'low', 'o': 'open', 'v': 'volume', 't': 'start'}
-                df = df.rename(columns=col_map)
+            # Convert numeric types explicitly
+            for col in ["close", "high", "low", "open", "volume"]:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
 
-                # Convert numeric values explicitly
-                for col in ["close", "high", "low", "open", "volume"]:
-                    if col in df.columns:
-                        df[col] = pd.to_numeric(df[col], errors='coerce')
-
-                # Ensure oldest -> newest sorting
-                time_col = "start" if "start" in df.columns else ("time" if "time" in df.columns else None)
-                if time_col:
-                    df[time_col] = pd.to_numeric(df[time_col], errors='coerce')
-                    df = df.sort_values(by=time_col, ascending=True).reset_index(drop=True)
-                else:
-                    df = df.iloc[::-1].reset_index(drop=True)
-
-                df = df.dropna(subset=["close", "high", "low"]).reset_index(drop=True)
-                
-                if len(df) > 1:
-                    return df
-                else:
-                    last_error = f"Only 1 candle returned for {resolution}"
-            else:
-                last_error = f"Empty result array for {resolution}"
+            df = df.dropna(subset=["close", "high", "low", "volume"]).reset_index(drop=True)
+            return df
         else:
-            last_error = f"API success=false: {res}"
+            last_error = f"API Error Response: {res}"
     except Exception as e:
-        last_error = f"Fetch exception ({resolution}): {e}"
+        last_error = f"Fetch exception ({interval}): {e}"
         print(last_error)
     return None
 
@@ -115,14 +94,14 @@ def calculate_rsi(close_series, period=14):
 
 def calculate_indicators():
     global last_error
-    df_30m = get_candles(resolution="30m", limit=100)
-    df_3m = get_candles(resolution="3m", limit=100)
+    df_30m = get_candles(interval="30m", limit=100)
+    df_3m = get_candles(interval="3m", limit=100)
     
     if df_30m is None or df_3m is None:
         return None
 
-    if len(df_30m) < 15 or len(df_3m) < 15:
-        last_error = f"Not enough rows: 30m={len(df_30m)}, 3m={len(df_3m)}"
+    if len(df_30m) < 25 or len(df_3m) < 25:
+        last_error = f"Not enough candles: 30m={len(df_30m)}, 3m={len(df_3m)}"
         return None
 
     # 1. 30M Trend Filter (EMA 21)
@@ -136,25 +115,17 @@ def calculate_indicators():
     # 2. 3M Indicators
     df_3m["ema_21_3m"] = df_3m["close"].ewm(span=21, adjust=False).mean()
     df_3m["rsi"] = calculate_rsi(df_3m["close"], 14)
-    
-    vol_col = "volume" if "volume" in df_3m.columns else None
-    if vol_col:
-        df_3m["vol_avg"] = df_3m[vol_col].rolling(window=20, min_periods=1).mean()
-    else:
-        df_3m["vol_avg"] = 1.0
+    df_3m["vol_avg"] = df_3m["volume"].rolling(window=20, min_periods=1).mean()
 
     latest_3m = df_3m.iloc[-1]
     current_price = float(latest_3m["close"])
     ema_21_val = float(latest_3m["ema_21_3m"])
     rsi_val = float(df_3m["rsi"].iloc[-1])
     
-    # Volume Filter Check
-    if vol_col:
-        vol_val = float(latest_3m[vol_col])
-        vol_avg_val = float(latest_3m["vol_avg"])
-        has_volume_spike = vol_val >= (1.2 * vol_avg_val)
-    else:
-        has_volume_spike = True
+    # Volume Filter Check (1.2x 20-period volume average)
+    vol_val = float(latest_3m["volume"])
+    vol_avg_val = float(latest_3m["vol_avg"])
+    has_volume_spike = vol_val >= (1.2 * vol_avg_val)
 
     # 3. SWING BREAKOUT LOGIC (Past 10 candles excluding live one)
     recent_candles = df_3m.iloc[-11:-1]
@@ -288,6 +259,6 @@ def home():
     })
 
 if __name__ == "__main__":
-    send_telegram("⚡ *Bot Fixed: Clean Requests Params & Multi-Candle Verification!*")
+    send_telegram("⚡ *Bot Fixed: 100% Reliable Kline Feed Connected & RSI Active!*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
