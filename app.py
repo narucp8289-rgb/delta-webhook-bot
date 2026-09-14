@@ -116,23 +116,30 @@ def calculate_atr(df, period=14):
 
 def calculate_indicators():
     global last_error
+    df_1h = get_candles(bar="1H", limit=100)
     df_30m = get_candles(bar="30m", limit=100)
     df_3m = get_candles(bar="3m", limit=100)
     
-    if df_30m is None or df_3m is None:
+    if df_1h is None or df_30m is None or df_3m is None:
         return None
 
-    if len(df_30m) < 25 or len(df_3m) < 25:
-        last_error = f"Not enough candles: 30m={len(df_30m)}, 3m={len(df_3m)}"
+    if len(df_1h) < 25 or len(df_30m) < 25 or len(df_3m) < 25:
+        last_error = f"Not enough candles"
         return None
 
-    # 1. 30M Trend Filter
+    # 1. 1H & 30M Double Trend Filter
+    df_1h["ema_21_1h"] = df_1h["close"].ewm(span=21, adjust=False).mean()
     df_30m["ema_21_30m"] = df_30m["close"].ewm(span=21, adjust=False).mean()
+
+    close_1h = float(df_1h["close"].iloc[-1])
+    ema_1h = float(df_1h["ema_21_1h"].iloc[-1])
+    
     close_30m = float(df_30m["close"].iloc[-1])
     ema_30m = float(df_30m["ema_21_30m"].iloc[-1])
 
-    is_30m_uptrend = close_30m >= ema_30m
-    is_30m_downtrend = close_30m < ema_30m
+    # 1H અને 30M બંને એક જ ટ્રેન્ડમાં હોવા જોઈએ
+    is_double_uptrend = (close_1h >= ema_1h) and (close_30m >= ema_30m)
+    is_double_downtrend = (close_1h < ema_1h) and (close_30m < ema_30m)
 
     # 2. 3M Indicators
     df_3m["ema_21_3m"] = df_3m["close"].ewm(span=21, adjust=False).mean()
@@ -141,7 +148,7 @@ def calculate_indicators():
     df_3m["atr"] = calculate_atr(df_3m, 14)
     df_3m["vol_avg"] = df_3m["volume"].rolling(window=20, min_periods=1).mean()
 
-    # 3. Last Closed Candle Confirmation (CANDLE CLOSE FILTER)
+    # 3. Last Closed Candle Confirmation
     last_closed_3m = df_3m.iloc[-2]
     closed_price = float(last_closed_3m["close"])
     ema_21_val = float(last_closed_3m["ema_21_3m"])
@@ -151,8 +158,9 @@ def calculate_indicators():
 
     vol_val = float(last_closed_3m["volume"])
     vol_avg_val = float(last_closed_3m["vol_avg"])
+    
     has_volume_spike = vol_val >= (1.2 * vol_avg_val)
-    has_strong_trend = adx_val >= 20.0  # ADX Sideways Filter
+    has_strong_trend = adx_val >= 25.0  # STRICT ADX FILTER FOR HIGH QUALITY
 
     # 4. Pure Swing Logic
     recent_candles = df_3m.iloc[-25:-2]
@@ -166,8 +174,8 @@ def calculate_indicators():
     had_proper_pullback_up = sum(recent_candles["high"] > recent_candles["ema_21_3m"]) >= 1
     had_proper_pullback_down = sum(recent_candles["low"] < recent_candles["ema_21_3m"]) >= 1
 
-    # SIGNALS WITH CANDLE CLOSE & ADX FILTER
-    sell_signal = bool(is_30m_downtrend and 
+    # HIGH-QUALITY SIGNALS
+    sell_signal = bool(is_double_downtrend and 
                        had_proper_pullback_up and 
                        (closed_price < swing_low) and 
                        (closed_price < ema_21_val) and 
@@ -175,7 +183,7 @@ def calculate_indicators():
                        has_strong_trend and 
                        (rsi_val < 50.0))
 
-    buy_signal = bool(is_30m_uptrend and 
+    buy_signal = bool(is_double_uptrend and 
                       had_proper_pullback_down and 
                       (closed_price > swing_high) and 
                       (closed_price > ema_21_val) and 
@@ -227,8 +235,8 @@ def check_active_position(current_price):
 
 def execute_trade(side, price, atr):
     global active_position
-    sl_dist = round(max(atr * 1.5, 12.0), 2)
-    tp_dist = round(sl_dist * 2.0, 2)
+    sl_dist = round(max(atr * 2.0, 15.0), 2)  # High-Quality Safe SL
+    tp_dist = round(sl_dist * 2.0, 2)          # 1:2 Risk to Reward
 
     sl = round(price - sl_dist if side == "BUY" else price + sl_dist, 2)
     tp = round(price + tp_dist if side == "BUY" else price - tp_dist, 2)
@@ -236,13 +244,13 @@ def execute_trade(side, price, atr):
     active_position = {"side": side, "entry": price, "sl": sl, "tp": tp}
 
     emoji = "🚀" if side == "BUY" else "🔻"
-    msg = (f"{emoji} *NEW CONFIRMED BREAKOUT TRADE!*\n\n"
+    msg = (f"{emoji} *A+ GRADE HIGH-QUALITY TRADE EXECUTED!*\n\n"
            f"*Symbol:* {SYMBOL}\n"
            f"*Side:* {side}\n"
            f"*Entry Price:* ${price}\n"
-           f"*Dynamic SL (ATR):* ${sl} (-${sl_dist})\n"
-           f"*Dynamic TP (1:2):* ${tp} (+${tp_dist})\n"
-           f"*Filter:* Closed Candle + ADX Trend Strength Applied")
+           f"*Safe Dynamic SL (2x ATR):* ${sl} (-${sl_dist})\n"
+           f"*Dynamic TP (1:2 R:R):* ${tp} (+${tp_dist})\n"
+           f"*Strategy:* 1H+30M Double Trend + ADX 25+ Filter Active")
     send_telegram(msg)
 
 # ================= BACKGROUND SCANNER LOOP =================
@@ -278,12 +286,13 @@ def home():
         latest_market_data = data
     return jsonify({
         "status": "running",
+        "mode": "A+ Grade High Quality Setup Scanner",
         "market_data": latest_market_data,
         "active_trade": active_position,
         "debug_error": last_error
     })
 
 if __name__ == "__main__":
-    send_telegram("⚡ *Bot Updated: ADX Filter, Dynamic ATR SL & Closed Candle Confirmation Active!*")
+    send_telegram("⚡ *A+ Grade High-Quality Setup Active: ADX >= 25, 1H+30M Double Trend Filter Enabled!*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
