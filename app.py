@@ -137,9 +137,12 @@ def calculate_indicators():
     close_30m = float(df_30m["close"].iloc[-1])
     ema_30m = float(df_30m["ema_21_30m"].iloc[-1])
 
-    # 1H અને 30M બંને એક જ ટ્રેન્ડમાં હોવા જોઈએ
-    is_double_uptrend = (close_1h >= ema_1h) and (close_30m >= ema_30m)
-    is_double_downtrend = (close_1h < ema_1h) and (close_30m < ema_30m)
+    # 1H અને 30M ટ્રેન્ડ સ્ટેટસ
+    is_1h_uptrend = close_1h >= ema_1h
+    is_30m_uptrend = close_30m >= ema_30m
+    
+    is_double_uptrend = is_1h_uptrend and is_30m_uptrend
+    is_double_downtrend = (not is_1h_uptrend) and (not is_30m_uptrend)
 
     # 2. 3M Indicators
     df_3m["ema_21_3m"] = df_3m["close"].ewm(span=21, adjust=False).mean()
@@ -160,7 +163,7 @@ def calculate_indicators():
     vol_avg_val = float(last_closed_3m["vol_avg"])
     
     has_volume_spike = vol_val >= (1.2 * vol_avg_val)
-    has_strong_trend = adx_val >= 25.0  # STRICT ADX FILTER FOR HIGH QUALITY
+    has_strong_trend = adx_val >= 25.0  # STRICT ADX FILTER (>= 25)
 
     # 4. Pure Swing Logic
     recent_candles = df_3m.iloc[-25:-2]
@@ -194,6 +197,8 @@ def calculate_indicators():
     last_error = "None"
     return {
         "price": round(closed_price, 2),
+        "trend_1h": "UP" if is_1h_uptrend else "DOWN",
+        "trend_30m": "UP" if is_30m_uptrend else "DOWN",
         "ema_21_3m": round(ema_21_val, 2),
         "rsi": round(rsi_val, 2),
         "adx": round(adx_val, 2),
@@ -235,7 +240,7 @@ def check_active_position(current_price):
 
 def execute_trade(side, price, atr):
     global active_position
-    sl_dist = round(max(atr * 2.0, 15.0), 2)  # High-Quality Safe SL
+    sl_dist = round(max(atr * 2.0, 15.0), 2)  # High-Quality Safe Dynamic SL
     tp_dist = round(sl_dist * 2.0, 2)          # 1:2 Risk to Reward
 
     sl = round(price - sl_dist if side == "BUY" else price + sl_dist, 2)
@@ -293,6 +298,6 @@ def home():
     })
 
 if __name__ == "__main__":
-    send_telegram("⚡ *A+ Grade High-Quality Setup Active: ADX >= 25, 1H+30M Double Trend Filter Enabled!*")
+    send_telegram("⚡ *Bot Updated: 1H & 30M Trend Display Enabled in JSON Output!*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
