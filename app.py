@@ -13,23 +13,19 @@ app = Flask(__name__)
 # ================= CONFIGURATION =================
 OKX_URL = "https://www.okx.com/api/v5/market/candles"
 SYMBOL_OKX = "ETH-USDT"
-SYMBOL_DELTA = "ETHUSDT"  # Delta Exchange Symbol
+SYMBOL_DELTA = "ETHUSDT"
 
-# Delta Exchange Demo API Credentials
 DELTA_BASE_URL = "https://demo-api.delta.exchange"
 DELTA_API_KEY = "AJoKtFdK8Zk6RGERPVgL7JKsLqmZlM"
 DELTA_API_SECRET = "kBhaicd31lPXRulniI5Y5r8M2S4A012O7Wfoea9y6jXDkFGbzfv59TTSebsl"
 
-# Telegram Configuration
 TELEGRAM_TOKEN = "8682624980:AAEBi3mlG6dTnG0DOmq5nJ50HsSLjU0FrFo"
 TELEGRAM_CHAT_ID = "5305261922"
 
-# Active Trade Tracker State
 active_position = None
 latest_market_data = {}
 last_error = "None"
 
-# ================= TELEGRAM FUNCTIONS =================
 def send_telegram(message):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -42,7 +38,6 @@ def send_telegram(message):
     except Exception as e:
         print(f"Telegram Error: {e}")
 
-# ================= DELTA EXCHANGE API FUNCTIONS =================
 def generate_delta_signature(method, path, payload="", timestamp=""):
     signature_data = method + timestamp + path + payload
     return hmac.new(
@@ -77,7 +72,6 @@ def send_delta_request(method, path, payload=None):
 def place_delta_order(side, price, sl_price, tp_price):
     global active_position
     try:
-        # Get Product ID for ETHUSDT
         prod_res = send_delta_request("GET", "/v2/products")
         product_id = None
         if prod_res and "result" in prod_res:
@@ -90,9 +84,8 @@ def place_delta_order(side, price, sl_price, tp_price):
             send_telegram("❌ Order Failed: Delta Product ID Not Found")
             return
 
-        order_size = 1  # Standard Lot Size
+        order_size = 1
 
-        # 1. Primary Market Order
         order_payload = {
             "product_id": product_id,
             "size": order_size,
@@ -103,7 +96,6 @@ def place_delta_order(side, price, sl_price, tp_price):
         res = send_delta_request("POST", "/v2/orders", order_payload)
         
         if res and res.get("success"):
-            # 2. Hard Stop Loss Order on Exchange
             sl_payload = {
                 "product_id": product_id,
                 "size": order_size,
@@ -114,7 +106,6 @@ def place_delta_order(side, price, sl_price, tp_price):
             }
             send_delta_request("POST", "/v2/orders", sl_payload)
 
-            # 3. Hard Take Profit Order on Exchange
             tp_payload = {
                 "product_id": product_id,
                 "size": order_size,
@@ -132,16 +123,15 @@ def place_delta_order(side, price, sl_price, tp_price):
                    f"*Symbol:* {SYMBOL_DELTA}\n"
                    f"*Side:* {side}\n"
                    f"*Entry Price:* ${price}\n"
-                   f"*Hard Stop Loss (Exchange):* ${sl_price}\n"
-                   f"*Hard Take Profit (Exchange):* ${tp_price}\n"
-                   f"*Execution:* Instant Exchange Hard SL (Zero Slippage)")
+                   f"*Hard Stop Loss:* ${sl_price}\n"
+                   f"*Hard Take Profit:* ${tp_price}\n"
+                   f"*Execution:* Instant Exchange Hard SL")
             send_telegram(msg)
         else:
             send_telegram(f"❌ Delta Order Failed: {res}")
     except Exception as e:
         print(f"Execution Error: {e}")
 
-# ================= TECHNICAL ANALYSIS =================
 def get_candles(bar="3m", limit=100):
     global last_error
     try:
@@ -222,7 +212,6 @@ def calculate_indicators():
     if df_1h is None or df_30m is None or df_3m is None:
         return None
 
-    # Trend Logic
     df_1h["ema_21_1h"] = df_1h["close"].ewm(span=21, adjust=False).mean()
     df_30m["ema_21_30m"] = df_30m["close"].ewm(span=21, adjust=False).mean()
 
@@ -235,7 +224,6 @@ def calculate_indicators():
     is_double_uptrend = is_1h_uptrend and is_30m_uptrend
     is_double_downtrend = (not is_1h_uptrend) and (not is_30m_uptrend)
 
-    # 3M Logic
     df_3m["ema_21_3m"] = df_3m["close"].ewm(span=21, adjust=False).mean()
     df_3m["rsi"] = calculate_rsi(df_3m["close"], 14)
     df_3m["adx"] = calculate_adx(df_3m, 14)
@@ -256,11 +244,10 @@ def calculate_indicators():
     has_strong_trend = adx_val >= 25.0
 
     recent_candles = df_3m.iloc[-25:-2]
-    candles_below = recent_candles[recent_candles["high"] < recent_candles["ema_21_3m"]]
-    swing_low = float(candles_below["low"].min()) if not candles_below.empty else float(recent_candles["low"].min())
-
-    candles_above = recent_candles[recent_candles["low"] > recent_candles["ema_21_3m"]]
-    swing_high = float(candles_above["high"].max()) if not candles_above.empty else float(recent_candles["high"].max())
+    
+    # Absolute Pure Swing High / Low Logic (No filters)
+    swing_low = float(recent_candles["low"].min())
+    swing_high = float(recent_candles["high"].max())
 
     had_proper_pullback_up = sum(recent_candles["high"] > recent_candles["ema_21_3m"]) >= 1
     had_proper_pullback_down = sum(recent_candles["low"] < recent_candles["ema_21_3m"]) >= 1
@@ -284,7 +271,6 @@ def calculate_indicators():
         "sell_signal": sell_signal
     }
 
-# ================= BACKGROUND SCANNER LOOP (2-SEC FAST LOOP) =================
 def trading_bot_loop():
     global latest_market_data
     while True:
@@ -310,11 +296,10 @@ def trading_bot_loop():
                         place_delta_order("SELL", price, sl, tp)
         except Exception as e:
             print(f"Loop Error: {e}")
-        time.sleep(2)  # Fast 2-second scan loop
+        time.sleep(2)
 
 threading.Thread(target=trading_bot_loop, daemon=True).start()
 
-# ================= FLASK SERVER ROUTES =================
 @app.route('/')
 def home():
     global latest_market_data
@@ -330,6 +315,6 @@ def home():
     })
 
 if __name__ == "__main__":
-    send_telegram("🚀 *Bot Updated: Delta Exchange Direct Execution with Hard SL Active!*")
+    send_telegram("🚀 *Bot Updated: Pure Swing High/Low Fix Deployed!*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
