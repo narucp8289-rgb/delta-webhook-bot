@@ -4,8 +4,6 @@ import pandas as pd
 import numpy as np
 import threading
 import time
-import hmac
-import hashlib
 from flask import Flask, jsonify
 
 app = Flask(__name__)
@@ -13,19 +11,13 @@ app = Flask(__name__)
 # ================= CONFIGURATION =================
 OKX_URL = "https://www.okx.com/api/v5/market/candles"
 SYMBOL_OKX = "ETH-USDT"
-SYMBOL_DELTA = "ETHUSDT"
-
-DELTA_BASE_URL = "https://demo-api.delta.exchange"
-DELTA_API_KEY = "AJoKtFdK8Zk6RGERPVgL7JKsLqmZlM"
-DELTA_API_SECRET = "kBhaicd31lPXRulniI5Y5r8M2S4A012O7Wfoea9y6jXDkFGbzfv59TTSebsl"
 
 TELEGRAM_TOKEN = "8682624980:AAEBi3mlG6dTnG0DOmq5nJ50HsSLjU0FrFo"
 TELEGRAM_CHAT_ID = "5305261922"
 
-active_position = None
 latest_market_data = {}
 last_error = "None"
-cached_product_id = None
+last_signal_time = 0  # બાર-બાર એક જ મેસેજ ન આવે તે માટે
 
 def send_telegram(message):
     try:
@@ -38,123 +30,6 @@ def send_telegram(message):
         requests.post(url, json=payload, timeout=5)
     except Exception as e:
         print(f"Telegram Error: {e}")
-
-def generate_delta_signature(method, path, payload="", timestamp=""):
-    signature_data = method + timestamp + path + payload
-    return hmac.new(
-        DELTA_API_SECRET.encode('utf-8'),
-        signature_data.encode('utf-8'),
-        hashlib.sha256
-    ).hexdigest()
-
-def send_delta_request(method, path, payload=None):
-    try:
-        url = DELTA_BASE_URL + path
-        timestamp = str(int(time.time()))
-        body_str = str(payload) if payload else ""
-        
-        signature = generate_delta_signature(method, path, body_str, timestamp)
-        headers = {
-            "api-key": DELTA_API_KEY,
-            "timestamp": timestamp,
-            "signature": signature,
-            "Content-Type": "application/json"
-        }
-        
-        if method == "GET":
-            res = requests.get(url, headers=headers, timeout=5)
-        else:
-            res = requests.post(url, headers=headers, json=payload, timeout=5)
-        return res.json()
-    except Exception as e:
-        print(f"Delta API Error: {e}")
-        return None
-
-def get_delta_product_id():
-    global cached_product_id
-    if cached_product_id:
-        return cached_product_id
-
-    prod_res = send_delta_request("GET", "/v2/products")
-    if prod_res and "result" in prod_res:
-        products = prod_res["result"]
-        if isinstance(products, list):
-            for p in products:
-                # Perpetual Futures Check for ETHUSDT
-                p_symbol = p.get("symbol") or ""
-                p_specs = p.get("product_specs", {})
-                spec_symbol = p_specs.get("symbol", "") if isinstance(p_specs, dict) else ""
-                
-                if p_symbol in [SYMBOL_DELTA, "ETH-USDT", "ETHUSDT"] or spec_symbol in ["ETHUSDT", "ETH-USDT"]:
-                    if p.get("contract_type") in ["perpetual_futures", "futures"]:
-                        cached_product_id = p["id"]
-                        return cached_product_id
-
-            # Fallback to first ETH product if contract_type filter misses
-            for p in products:
-                p_symbol = str(p.get("symbol", ""))
-                if "ETH" in p_symbol and "USDT" in p_symbol:
-                    cached_product_id = p["id"]
-                    return cached_product_id
-
-    return None
-
-def place_delta_order(side, price, sl_price, tp_price):
-    global active_position
-    try:
-        product_id = get_delta_product_id()
-        
-        if not product_id:
-            send_telegram("❌ Order Failed: Delta Product ID Not Found")
-            return
-
-        order_size = 1
-
-        order_payload = {
-            "product_id": product_id,
-            "size": order_size,
-            "side": side.lower(),
-            "order_type": "market_order"
-        }
-        
-        res = send_delta_request("POST", "/v2/orders", order_payload)
-        
-        if res and res.get("success"):
-            sl_payload = {
-                "product_id": product_id,
-                "size": order_size,
-                "side": "sell" if side == "BUY" else "buy",
-                "order_type": "stop_market_order",
-                "stop_price": str(sl_price),
-                "reduce_only": True
-            }
-            send_delta_request("POST", "/v2/orders", sl_payload)
-
-            tp_payload = {
-                "product_id": product_id,
-                "size": order_size,
-                "side": "sell" if side == "BUY" else "buy",
-                "order_type": "take_profit_market_order",
-                "stop_price": str(tp_price),
-                "reduce_only": True
-            }
-            send_delta_request("POST", "/v2/orders", tp_payload)
-
-            active_position = {"side": side, "entry": price, "sl": sl_price, "tp": tp_price}
-
-            emoji = "🚀" if side == "BUY" else "🔻"
-            msg = (f"{emoji} *80%+ ACCURACY HARD SL ORDER EXECUTED!*\n\n"
-                   f"*Symbol:* {SYMBOL_DELTA}\n"
-                   f"*Side:* {side}\n"
-                   f"*Entry Price:* ${price}\n"
-                   f"*Hard Stop Loss:* ${sl_price}\n"
-                   f"*Hard Take Profit:* ${tp_price}\n"
-                   f"*Quality:* A+ Confluence Breakdown")
-            send_telegram(msg)
-        else:
-            send_telegram(f"❌ Delta Order Failed: {res}")
-    except Exception as e:
-        print(f"Execution Error: {e}")
 
 def get_candles(bar="3m", limit=100):
     global last_error
@@ -228,7 +103,6 @@ def calculate_atr(df, period=14):
         return pd.Series([15.0] * len(df))
 
 def calculate_indicators():
-    global last_error
     df_1h = get_candles(bar="1H", limit=100)
     df_30m = get_candles(bar="30m", limit=100)
     df_3m = get_candles(bar="3m", limit=100)
@@ -268,11 +142,9 @@ def calculate_indicators():
     vol_val = float(last_closed_3m["volume"])
     vol_avg_val = float(last_closed_3m["vol_avg"])
     
-    # 80%+ High Accuracy Filters
     has_volume_spike_1_5x = vol_val >= (1.5 * vol_avg_val)
     has_strong_trend = adx_val >= 25.0
     
-    # Candle Body Ratio Check (Must be >= 60% real body)
     candle_range = max(high_price - low_price, 1e-5)
     candle_body = abs(closed_price - open_price)
     is_strong_body = (candle_body / candle_range) >= 0.60
@@ -308,23 +180,13 @@ def calculate_indicators():
 
     return {
         "price": round(closed_price, 2),
-        "trend_1h": "UP" if is_1h_uptrend else "DOWN",
-        "trend_30m": "UP" if is_30m_uptrend else "DOWN",
-        "ema_21_3m": round(ema_21_val, 2),
-        "rsi": round(rsi_val, 2),
-        "adx": round(adx_val, 2),
         "atr": round(atr_val, 2),
-        "volume_spike_1_5x": bool(has_volume_spike_1_5x),
-        "strong_body_60pct": bool(is_strong_body),
-        "strong_trend": bool(has_strong_trend),
-        "swing_low": round(swing_low, 2),
-        "swing_high": round(swing_high, 2),
         "buy_signal": buy_signal,
         "sell_signal": sell_signal
     }
 
-def trading_bot_loop():
-    global latest_market_data
+def alert_bot_loop():
+    global latest_market_data, last_signal_time
     while True:
         try:
             data = calculate_indicators()
@@ -332,41 +194,49 @@ def trading_bot_loop():
                 latest_market_data = data
                 price = data["price"]
                 atr = data["atr"]
+                current_time = time.time()
 
-                if active_position is None:
+                # દર 3 મિનિટે માત્ર એક જ વાર નવો સિગ્નલ એલર્ટ મોકલશે
+                if (current_time - last_signal_time) > 180:
                     sl_dist = round(max(atr * 2.0, 15.0), 2)
                     tp_dist = round(sl_dist * 2.0, 2)
 
                     if data["buy_signal"]:
                         sl = round(price - sl_dist, 2)
                         tp = round(price + tp_dist, 2)
-                        place_delta_order("BUY", price, sl, tp)
+                        msg = (f"🚀 *HIGH-ACCURACY BUY SIGNAL (ETH-USDT)*\n\n"
+                               f"📌 *Entry Price:* ${price}\n"
+                               f"🛑 *Stop Loss:* ${sl}\n"
+                               f"🎯 *Take Profit:* ${tp}\n\n"
+                               f"👉 *Action:* Delta Exchange માં જઈને **BUY (LONG)** ઓર્ડર મૂકો.")
+                        send_telegram(msg)
+                        last_signal_time = current_time
 
                     elif data["sell_signal"]:
                         sl = round(price + sl_dist, 2)
                         tp = round(price - tp_dist, 2)
-                        place_delta_order("SELL", price, sl, tp)
+                        msg = (f"🔻 *HIGH-ACCURACY SELL SIGNAL (ETH-USDT)*\n\n"
+                               f"📌 *Entry Price:* ${price}\n"
+                               f"🛑 *Stop Loss:* ${sl}\n"
+                               f"🎯 *Take Profit:* ${tp}\n\n"
+                               f"👉 *Action:* Delta Exchange માં જઈને **SELL (SHORT)** ઓર્ડર મૂકો.")
+                        send_telegram(msg)
+                        last_signal_time = current_time
         except Exception as e:
             print(f"Loop Error: {e}")
-        time.sleep(2)
+        time.sleep(3)
 
-threading.Thread(target=trading_bot_loop, daemon=True).start()
+threading.Thread(target=alert_bot_loop, daemon=True).start()
 
 @app.route('/')
 def home():
-    global latest_market_data
-    data = calculate_indicators()
-    if data:
-        latest_market_data = data
     return jsonify({
         "status": "running",
-        "mode": "Delta 80%+ Accuracy Hard SL Trading Active",
-        "market_data": latest_market_data,
-        "active_trade": active_position,
-        "debug_error": last_error
+        "mode": "Telegram Alert Bot (Manual Trading)",
+        "market_data": latest_market_data
     })
 
 if __name__ == "__main__":
-    send_telegram("⚡ *Bot Updated: 80%+ Accuracy Filters & Delta Product ID Resolver Active!*")
+    send_telegram("🔔 *Manual Alert Bot Active! Delta API Removed.*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
