@@ -19,6 +19,9 @@ latest_market_data = {}
 last_error = "None"
 last_signal_time = 0
 
+# એક્ટિવ ટ્રેડ ટ્રેકિંગ માટે
+active_signal = None  # Stores: {'side': 'BUY'/'SELL', 'sl': float, 'tp': float, 'entry': float}
+
 def send_telegram(message):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -180,6 +183,8 @@ def calculate_indicators():
 
     return {
         "price": round(closed_price, 2),
+        "high": round(high_price, 2),
+        "low": round(low_price, 2),
         "trend_1h": "UP" if is_1h_uptrend else "DOWN",
         "trend_30m": "UP" if is_30m_uptrend else "DOWN",
         "ema_21_3m": round(ema_21_val, 2),
@@ -196,23 +201,56 @@ def calculate_indicators():
     }
 
 def alert_bot_loop():
-    global latest_market_data, last_signal_time
+    global latest_market_data, last_signal_time, active_signal
     while True:
         try:
             data = calculate_indicators()
             if data:
                 latest_market_data = data
                 price = data["price"]
+                high = data["high"]
+                low = data["low"]
                 atr = data["atr"]
                 current_time = time.time()
 
-                if (current_time - last_signal_time) > 180:
+                # === 1. SL/TP TRACKING LOGIC ===
+                if active_signal is not None:
+                    side = active_signal["side"]
+                    sl = active_signal["sl"]
+                    tp = active_signal["tp"]
+                    entry = active_signal["entry"]
+
+                    if side == "BUY":
+                        if high >= tp:
+                            msg = f"🎯 *TAKE PROFIT HIT! (BUY)*\n\n📌 Entry: ${entry}\n🎯 TP Target: ${tp}\n✅ Profit Achieved!"
+                            send_telegram(msg)
+                            active_signal = None
+                        elif low <= sl:
+                            msg = f"🛑 *STOP LOSS HIT! (BUY)*\n\n📌 Entry: ${entry}\n🛑 SL Triggered: ${sl}"
+                            send_telegram(msg)
+                            active_signal = None
+
+                    elif side == "SELL":
+                        if low <= tp:
+                            msg = f"🎯 *TAKE PROFIT HIT! (SELL)*\n\n📌 Entry: ${entry}\n🎯 TP Target: ${tp}\n✅ Profit Achieved!"
+                            send_telegram(msg)
+                            active_signal = None
+                        elif high >= sl:
+                            msg = f"🛑 *STOP LOSS HIT! (SELL)*\n\n📌 Entry: ${entry}\n🛑 SL Triggered: ${sl}"
+                            send_telegram(msg)
+                            active_signal = None
+
+                # === 2. NEW SIGNAL GENERATION LOGIC ===
+                # જૂનો ટ્રેડ ચાલુ ન હોય ત્યારે જ નવો ટ્રેડ આપશે
+                if active_signal is None and (current_time - last_signal_time) > 300:
                     sl_dist = round(max(atr * 2.0, 15.0), 2)
                     tp_dist = round(sl_dist * 2.0, 2)
 
                     if data["buy_signal"]:
                         sl = round(price - sl_dist, 2)
                         tp = round(price + tp_dist, 2)
+                        active_signal = {"side": "BUY", "sl": sl, "tp": tp, "entry": price}
+                        
                         msg = (f"🚀 *HIGH-ACCURACY BUY SIGNAL (ETH-USDT)*\n\n"
                                f"📌 *Entry Price:* ${price}\n"
                                f"🛑 *Stop Loss:* ${sl}\n"
@@ -225,6 +263,8 @@ def alert_bot_loop():
                     elif data["sell_signal"]:
                         sl = round(price + sl_dist, 2)
                         tp = round(price - tp_dist, 2)
+                        active_signal = {"side": "SELL", "sl": sl, "tp": tp, "entry": price}
+
                         msg = (f"🔻 *HIGH-ACCURACY SELL SIGNAL (ETH-USDT)*\n\n"
                                f"📌 *Entry Price:* ${price}\n"
                                f"🛑 *Stop Loss:* ${sl}\n"
@@ -233,6 +273,7 @@ def alert_bot_loop():
                                f"👉 *Action:* Delta Exchange માં **SELL (SHORT)** કરો.")
                         send_telegram(msg)
                         last_signal_time = current_time
+
         except Exception as e:
             print(f"Loop Error: {e}")
         time.sleep(3)
@@ -241,17 +282,18 @@ threading.Thread(target=alert_bot_loop, daemon=True).start()
 
 @app.route('/')
 def home():
-    global latest_market_data
+    global latest_market_data, active_signal
     data = calculate_indicators()
     if data:
         latest_market_data = data
     return jsonify({
         "status": "running",
-        "mode": "Telegram Alert Bot (Manual Trading)",
+        "mode": "Telegram Alert Bot with Live SL/TP Tracker",
+        "active_signal": active_signal,
         "market_data": latest_market_data
     })
 
 if __name__ == "__main__":
-    send_telegram("🔔 *Manual Alert Bot Active with Swing Levels Output!*")
+    send_telegram("🔔 *Manual Alert Bot Active with Live SL/TP Tracker!*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
