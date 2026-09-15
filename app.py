@@ -17,7 +17,7 @@ TELEGRAM_CHAT_ID = "5305261922"
 
 latest_market_data = {}
 last_error = "None"
-last_signal_time = 0  # બાર-બાર એક જ મેસેજ ન આવે તે માટે
+last_signal_time = 0
 
 def send_telegram(message):
     try:
@@ -180,7 +180,17 @@ def calculate_indicators():
 
     return {
         "price": round(closed_price, 2),
+        "trend_1h": "UP" if is_1h_uptrend else "DOWN",
+        "trend_30m": "UP" if is_30m_uptrend else "DOWN",
+        "ema_21_3m": round(ema_21_val, 2),
+        "rsi": round(rsi_val, 2),
+        "adx": round(adx_val, 2),
         "atr": round(atr_val, 2),
+        "volume_spike_1_5x": bool(has_volume_spike_1_5x),
+        "strong_body_60pct": bool(is_strong_body),
+        "strong_trend": bool(has_strong_trend),
+        "swing_low": round(swing_low, 2),
+        "swing_high": round(swing_high, 2),
         "buy_signal": buy_signal,
         "sell_signal": sell_signal
     }
@@ -196,7 +206,6 @@ def alert_bot_loop():
                 atr = data["atr"]
                 current_time = time.time()
 
-                # દર 3 મિનિટે માત્ર એક જ વાર નવો સિગ્નલ એલર્ટ મોકલશે
                 if (current_time - last_signal_time) > 180:
                     sl_dist = round(max(atr * 2.0, 15.0), 2)
                     tp_dist = round(sl_dist * 2.0, 2)
@@ -207,8 +216,9 @@ def alert_bot_loop():
                         msg = (f"🚀 *HIGH-ACCURACY BUY SIGNAL (ETH-USDT)*\n\n"
                                f"📌 *Entry Price:* ${price}\n"
                                f"🛑 *Stop Loss:* ${sl}\n"
-                               f"🎯 *Take Profit:* ${tp}\n\n"
-                               f"👉 *Action:* Delta Exchange માં જઈને **BUY (LONG)** ઓર્ડર મૂકો.")
+                               f"🎯 *Take Profit:* ${tp}\n"
+                               f"📉 *Swing High:* ${data['swing_high']}\n\n"
+                               f"👉 *Action:* Delta Exchange માં **BUY (LONG)** કરો.")
                         send_telegram(msg)
                         last_signal_time = current_time
 
@@ -218,8 +228,9 @@ def alert_bot_loop():
                         msg = (f"🔻 *HIGH-ACCURACY SELL SIGNAL (ETH-USDT)*\n\n"
                                f"📌 *Entry Price:* ${price}\n"
                                f"🛑 *Stop Loss:* ${sl}\n"
-                               f"🎯 *Take Profit:* ${tp}\n\n"
-                               f"👉 *Action:* Delta Exchange માં જઈને **SELL (SHORT)** ઓર્ડર મૂકો.")
+                               f"🎯 *Take Profit:* ${tp}\n"
+                               f"📈 *Swing Low:* ${data['swing_low']}\n\n"
+                               f"👉 *Action:* Delta Exchange માં **SELL (SHORT)** કરો.")
                         send_telegram(msg)
                         last_signal_time = current_time
         except Exception as e:
@@ -230,6 +241,10 @@ threading.Thread(target=alert_bot_loop, daemon=True).start()
 
 @app.route('/')
 def home():
+    global latest_market_data
+    data = calculate_indicators()
+    if data:
+        latest_market_data = data
     return jsonify({
         "status": "running",
         "mode": "Telegram Alert Bot (Manual Trading)",
@@ -237,6 +252,6 @@ def home():
     })
 
 if __name__ == "__main__":
-    send_telegram("🔔 *Manual Alert Bot Active! Delta API Removed.*")
+    send_telegram("🔔 *Manual Alert Bot Active with Swing Levels Output!*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
