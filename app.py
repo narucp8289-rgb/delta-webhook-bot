@@ -25,7 +25,6 @@ TELEGRAM_CHAT_ID = "5305261922"
 active_position = None
 latest_market_data = {}
 last_error = "None"
-cached_product_id = None
 
 def send_telegram(message):
     try:
@@ -70,26 +69,16 @@ def send_delta_request(method, path, payload=None):
         print(f"Delta API Error: {e}")
         return None
 
-def get_delta_product_id():
-    global cached_product_id
-    if cached_product_id:
-        return cached_product_id
-
-    prod_res = send_delta_request("GET", "/v2/products")
-    if prod_res and "result" in prod_res:
-        products = prod_res["result"]
-        if isinstance(products, list):
-            for p in products:
-                symbol = p.get("symbol") or p.get("product_specs", {}).get("symbol")
-                if symbol == SYMBOL_DELTA or symbol == "ETH-USDT":
-                    cached_product_id = p["id"]
-                    return cached_product_id
-    return None
-
 def place_delta_order(side, price, sl_price, tp_price):
     global active_position
     try:
-        product_id = get_delta_product_id()
+        prod_res = send_delta_request("GET", "/v2/products")
+        product_id = None
+        if prod_res and "result" in prod_res:
+            for p in prod_res["result"]:
+                if p.get("symbol") == SYMBOL_DELTA:
+                    product_id = p["id"]
+                    break
         
         if not product_id:
             send_telegram("❌ Order Failed: Delta Product ID Not Found")
@@ -255,6 +244,8 @@ def calculate_indicators():
     has_strong_trend = adx_val >= 25.0
 
     recent_candles = df_3m.iloc[-25:-2]
+    
+    # Absolute Pure Swing High / Low Logic (No filters)
     swing_low = float(recent_candles["low"].min())
     swing_high = float(recent_candles["high"].max())
 
@@ -324,6 +315,6 @@ def home():
     })
 
 if __name__ == "__main__":
-    send_telegram("🚀 *Bot Updated: Product ID Resolution Fixed!*")
+    send_telegram("🚀 *Bot Updated: Pure Swing High/Low Fix Deployed!*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
