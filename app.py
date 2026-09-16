@@ -10,15 +10,16 @@ app = Flask(__name__)
 
 # ================= CONFIGURATION =================
 OKX_URL = "https://www.okx.com/api/v5/market/candles"
-SYMBOL_OKX = "ETH-USDT"
+# ત્રણેય કોઈન્સના સિમ્બોલ
+SYMBOLS = ["ETH-USDT", "BTC-USDT", "SOL-USDT"]
 
 TELEGRAM_TOKEN = "8682624980:AAEBi3mlG6dTnG0DOmq5nJ50HsSLjU0FrFo"
 TELEGRAM_CHAT_ID = "5305261922"
 
 latest_market_data = {}
 last_error = "None"
-last_signal_time = 0
-active_signal = None  # Stores active trade data for SL/TP tracking
+last_signal_time = {symbol: 0 for symbol in SYMBOLS}
+active_signals = {symbol: None for symbol in SYMBOLS}  # Dynamic SL/TP Tracking for each symbol
 
 def send_telegram(message):
     try:
@@ -32,10 +33,10 @@ def send_telegram(message):
     except Exception as e:
         print(f"Telegram Error: {e}")
 
-def get_candles(bar="3m", limit=100):
+def get_candles(symbol, bar="3m", limit=100):
     global last_error
     try:
-        params = {"instId": SYMBOL_OKX, "bar": bar, "limit": limit}
+        params = {"instId": symbol, "bar": bar, "limit": limit}
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         response = requests.get(OKX_URL, params=params, headers=headers, timeout=10)
         res = response.json()
@@ -54,7 +55,7 @@ def get_candles(bar="3m", limit=100):
                 df = df.dropna(subset=["close", "high", "low", "volume"]).reset_index(drop=True)
                 return df
     except Exception as e:
-        last_error = f"Fetch exception ({bar}): {e}"
+        last_error = f"Fetch exception ({symbol} - {bar}): {e}"
     return None
 
 def calculate_rsi(close_series, period=14):
@@ -103,10 +104,10 @@ def calculate_atr(df, period=14):
     except Exception as e:
         return pd.Series([15.0] * len(df))
 
-def calculate_indicators():
-    df_1h = get_candles(bar="1H", limit=100)
-    df_30m = get_candles(bar="30m", limit=100)
-    df_3m = get_candles(bar="3m", limit=100)
+def calculate_indicators(symbol):
+    df_1h = get_candles(symbol, bar="1H", limit=100)
+    df_30m = get_candles(symbol, bar="30m", limit=100)
+    df_3m = get_candles(symbol, bar="3m", limit=100)
     
     if df_1h is None or df_30m is None or df_3m is None:
         return None
@@ -131,7 +132,6 @@ def calculate_indicators():
     df_3m["atr"] = calculate_atr(df_3m, 14)
     df_3m["vol_avg"] = df_3m["volume"].rolling(window=20, min_periods=1).mean()
 
-    # કમ્પ્લીટ થયેલી કન્ફર્મેશન કેન્ડલ (iloc[-2])
     entry_candle = df_3m.iloc[-2]
 
     entry_close = float(entry_candle["close"])
@@ -154,7 +154,7 @@ def calculate_indicators():
     candle_body = abs(entry_close - entry_open)
     is_strong_body = (candle_body / candle_range) >= 0.60
 
-    # બ્રેકઆઉટ કેન્ડલ (iloc[-2]) ની પહેલાંની 20 કેન્ડલ્સમાંથી સ્વિંગ ગણવો (કન્ફ્લિક્ટ ફિક્સ)
+    # Swing High/Low calculation (Last 20 candles before breakout)
     recent_candles = df_3m.iloc[-22:-2]
     swing_low = float(recent_candles["low"].min())
     swing_high = float(recent_candles["high"].max())
@@ -185,6 +185,7 @@ def calculate_indicators():
     )
 
     return {
+        "symbol": symbol,
         "price": round(entry_close, 2),
         "high": round(entry_high, 2),
         "low": round(entry_low, 2),
@@ -204,98 +205,100 @@ def calculate_indicators():
     }
 
 def alert_bot_loop():
-    global latest_market_data, last_signal_time, active_signal
+    global latest_market_data, last_signal_time, active_signals
     while True:
-        try:
-            data = calculate_indicators()
-            if data:
-                latest_market_data = data
-                price = data["price"]
-                high = data["high"]
-                low = data["low"]
-                atr = data["atr"]
-                current_time = time.time()
+        for symbol in SYMBOLS:
+            try:
+                data = calculate_indicators(symbol)
+                if data:
+                    latest_market_data[symbol] = data
+                    price = data["price"]
+                    high = data["high"]
+                    low = data["low"]
+                    atr = data["atr"]
+                    current_time = time.time()
 
-                # 1. LIVE SL/TP TRACKER
-                if active_signal is not None:
-                    side = active_signal["side"]
-                    sl = active_signal["sl"]
-                    tp = active_signal["tp"]
-                    entry = active_signal["entry"]
+                    # 1. LIVE SL/TP TRACKER PER SYMBOL
+                    if active_signals[symbol] is not None:
+                        act = active_signals[symbol]
+                        side = act["side"]
+                        sl = act["sl"]
+                        tp = act["tp"]
+                        entry = act["entry"]
 
-                    if side == "BUY":
-                        if high >= tp:
-                            msg = f"🎯 *TAKE PROFIT HIT! (BUY)*\n\n📌 Entry: ${entry}\n🎯 TP Target: ${tp}\n✅ Profit Achieved!"
+                        if side == "BUY":
+                            if high >= tp:
+                                msg = f"🎯 *TAKE PROFIT HIT! ({symbol} BUY)*\n\n📌 Entry: ${entry}\n🎯 TP Target: ${tp}\n✅ Profit Achieved!"
+                                send_telegram(msg)
+                                active_signals[symbol] = None
+                            elif low <= sl:
+                                msg = f"🛑 *STOP LOSS HIT! ({symbol} BUY)*\n\n📌 Entry: ${entry}\n🛑 SL Triggered: ${sl}"
+                                send_telegram(msg)
+                                active_signals[symbol] = None
+
+                        elif side == "SELL":
+                            if low <= tp:
+                                msg = f"🎯 *TAKE PROFIT HIT! ({symbol} SELL)*\n\n📌 Entry: ${entry}\n🎯 TP Target: ${tp}\n✅ Profit Achieved!"
+                                send_telegram(msg)
+                                active_signals[symbol] = None
+                            elif high >= sl:
+                                msg = f"🛑 *STOP LOSS HIT! ({symbol} SELL)*\n\n📌 Entry: ${entry}\n🛑 SL Triggered: ${sl}"
+                                send_telegram(msg)
+                                active_signals[symbol] = None
+
+                    # 2. SIGNAL GENERATION (15-min Cooldown per symbol)
+                    if active_signals[symbol] is None and (current_time - last_signal_time[symbol]) > 900:
+                        # Minimum SL Dynamic adjustment
+                        min_sl = 15.0 if "ETH" in symbol else (200.0 if "BTC" in symbol else 1.0)
+                        sl_dist = round(max(atr * 2.0, min_sl), 2)
+                        tp_dist = round(sl_dist * 2.0, 2)
+
+                        if data["buy_signal"]:
+                            sl = round(price - sl_dist, 2)
+                            tp = round(price + tp_dist, 2)
+                            active_signals[symbol] = {"side": "BUY", "sl": sl, "tp": tp, "entry": price}
+                            
+                            msg = (f"🚀 *HIGH-ACCURACY BUY SIGNAL ({symbol})*\n\n"
+                                   f"📌 *Entry Price:* ${price}\n"
+                                   f"🛑 *Stop Loss:* ${sl}\n"
+                                   f"🎯 *Take Profit:* ${tp}\n"
+                                   f"📉 *Swing High Breakout:* ${data['swing_high']}\n\n"
+                                   f"👉 *Action:* Delta Exchange માં **BUY (LONG)** કરો.")
                             send_telegram(msg)
-                            active_signal = None
-                        elif low <= sl:
-                            msg = f"🛑 *STOP LOSS HIT! (BUY)*\n\n📌 Entry: ${entry}\n🛑 SL Triggered: ${sl}"
+                            last_signal_time[symbol] = current_time
+
+                        elif data["sell_signal"]:
+                            sl = round(price + sl_dist, 2)
+                            tp = round(price - tp_dist, 2)
+                            active_signals[symbol] = {"side": "SELL", "sl": sl, "tp": tp, "entry": price}
+
+                            msg = (f"🔻 *HIGH-ACCURACY SELL SIGNAL ({symbol})*\n\n"
+                                   f"📌 *Entry Price:* ${price}\n"
+                                   f"🛑 *Stop Loss:* ${sl}\n"
+                                   f"🎯 *Take Profit:* ${tp}\n"
+                                   f"📈 *Swing Low Breakout:* ${data['swing_low']}\n\n"
+                                   f"👉 *Action:* Delta Exchange માં **SELL (SHORT)** કરો.")
                             send_telegram(msg)
-                            active_signal = None
+                            last_signal_time[symbol] = current_time
 
-                    elif side == "SELL":
-                        if low <= tp:
-                            msg = f"🎯 *TAKE PROFIT HIT! (SELL)*\n\n📌 Entry: ${entry}\n🎯 TP Target: ${tp}\n✅ Profit Achieved!"
-                            send_telegram(msg)
-                            active_signal = None
-                        elif high >= sl:
-                            msg = f"🛑 *STOP LOSS HIT! (SELL)*\n\n📌 Entry: ${entry}\n🛑 SL Triggered: ${sl}"
-                            send_telegram(msg)
-                            active_signal = None
-
-                # 2. SIGNAL GENERATION LOGIC (900 seconds cooldown)
-                if active_signal is None and (current_time - last_signal_time) > 900:
-                    sl_dist = round(max(atr * 2.0, 15.0), 2)
-                    tp_dist = round(sl_dist * 2.0, 2)
-
-                    if data["buy_signal"]:
-                        sl = round(price - sl_dist, 2)
-                        tp = round(price + tp_dist, 2)
-                        active_signal = {"side": "BUY", "sl": sl, "tp": tp, "entry": price}
-                        
-                        msg = (f"🚀 *HIGH-ACCURACY BUY SIGNAL*\n\n"
-                               f"📌 *Entry Price:* ${price}\n"
-                               f"🛑 *Stop Loss:* ${sl}\n"
-                               f"🎯 *Take Profit:* ${tp}\n"
-                               f"📉 *Swing High Breakout:* ${data['swing_high']}\n\n"
-                               f"👉 *Action:* Delta Exchange માં **BUY (LONG)** કરો.")
-                        send_telegram(msg)
-                        last_signal_time = current_time
-
-                    elif data["sell_signal"]:
-                        sl = round(price + sl_dist, 2)
-                        tp = round(price - tp_dist, 2)
-                        active_signal = {"side": "SELL", "sl": sl, "tp": tp, "entry": price}
-
-                        msg = (f"🔻 *HIGH-ACCURACY SELL SIGNAL*\n\n"
-                               f"📌 *Entry Price:* ${price}\n"
-                               f"🛑 *Stop Loss:* ${sl}\n"
-                               f"🎯 *Take Profit:* ${tp}\n"
-                               f"📈 *Swing Low Breakout:* ${data['swing_low']}\n\n"
-                               f"👉 *Action:* Delta Exchange માં **SELL (SHORT)** કરો.")
-                        send_telegram(msg)
-                        last_signal_time = current_time
-
-        except Exception as e:
-            print(f"Loop Error: {e}")
+            except Exception as e:
+                print(f"Loop Error ({symbol}): {e}")
+            time.sleep(2)
         time.sleep(3)
 
 threading.Thread(target=alert_bot_loop, daemon=True).start()
 
 @app.route('/')
 def home():
-    global latest_market_data, active_signal
-    data = calculate_indicators()
-    if data:
-        latest_market_data = data
+    global latest_market_data, active_signals
     return jsonify({
         "status": "running",
-        "mode": "Telegram Alert Bot (Fixed Swing & Confirmation Logic)",
-        "active_signal": active_signal,
+        "mode": "Multi-Crypto Alert Bot (ETH, BTC, SOL)",
+        "active_signals": active_signals,
         "market_data": latest_market_data
     })
 
 if __name__ == "__main__":
-    send_telegram("🔔 *Bot Active with Fixed Breakout & Swing Logic!*")
+    send_telegram("🔔 *Multi-Crypto Bot Active for ETH, BTC, & SOL!*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
