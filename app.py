@@ -11,7 +11,7 @@ app = Flask(__name__)
 
 # ================= CONFIGURATION =================
 OKX_URL = "https://www.okx.com/api/v5/market/candles"
-SYMBOLS = ["ETH-USDT", "BTC-USDT", "SOL-USDT"]
+SYMBOLS = ["ETH-USDT", "BTC-USDT", "SOL-USDT", "XAUT-USDT"]
 
 TELEGRAM_TOKEN = "8682624980:AAEBi3mlG6dTnG0DOmq5nJ50HsSLjU0FrFo"
 TELEGRAM_CHAT_ID = "5305261922"
@@ -279,10 +279,18 @@ def alert_bot_loop():
                                 active_signals[symbol] = None
 
                     # ================= 3. SKIP LATE ENTRY & DUPLICATE CHECK =================
-                    # Only process signal if this exact closed candle has NOT been processed before
-                    if active_signals[symbol] is None and last_processed_candle_ts[symbol] != current_candle_ts:
+                    if active_signals[symbol] is None and last_processed_candle_ts[symbol] != currentcandle_ts:
                         
-                        min_sl = 15.0 if "ETH" in symbol else (200.0 if "BTC" in symbol else 1.0)
+                        # Asset-Specific Minimum SL Rules
+                        if "ETH" in symbol:
+                            min_sl = 15.0
+                        elif "BTC" in symbol:
+                            min_sl = 200.0
+                        elif "XAUT" in symbol:
+                            min_sl = 5.0
+                        else:
+                            min_sl = 1.0
+
                         sl_dist = round(max(atr * 2.0, min_sl), 2)
                         tp_dist = round(sl_dist * 2.0, 2)  # Fixed 1:2 R:R Ratio
 
@@ -326,12 +334,12 @@ def home():
     global latest_market_data, active_signals
     return jsonify({
         "status": "running",
-        "mode": "Upgraded Fast Multi-Crypto Alert Bot (Zero Delay & Cached)",
+        "mode": "Upgraded Fast Multi-Crypto & Gold Alert Bot (ETH, BTC, SOL, XAUT)",
         "active_signals": active_signals,
         "market_data": latest_market_data
     })
 
 if __name__ == "__main__":
-    send_telegram("⚡ *Upgraded Multi-Crypto Bot Active (Ultra-Fast & Cache Enabled)*")
+    send_telegram("⚡ *Upgraded Multi-Crypto & Gold Bot Active (ETH, BTC, SOL, XAUT)*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
