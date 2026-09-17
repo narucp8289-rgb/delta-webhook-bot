@@ -279,7 +279,8 @@ def alert_bot_loop():
                                 active_signals[symbol] = None
 
                     # ================= 3. SKIP LATE ENTRY & DUPLICATE CHECK =================
-                    if active_signals[symbol] is None and last_processed_candle_ts[symbol] != currentcandle_ts:
+                    # FIXED TYPO HERE: currentcandle_ts -> current_candle_ts
+                    if active_signals[symbol] is None and last_processed_candle_ts[symbol] != current_candle_ts:
                         
                         # Asset-Specific Minimum SL Rules
                         if "ETH" in symbol:
