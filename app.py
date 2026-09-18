@@ -161,7 +161,6 @@ def calculate_indicators(symbol):
     df_3m["vol_avg"] = df_3m["volume"].rolling(window=20, min_periods=1).mean()
 
     # ================= 2. INSTANT CANDLE-CLOSE EXECUTION =================
-    # iloc[-2] is the exact candle that just closed
     entry_candle = df_3m.iloc[-2]
     candle_ts = str(entry_candle["ts"])
 
@@ -279,21 +278,21 @@ def alert_bot_loop():
                                 active_signals[symbol] = None
 
                     # ================= 3. SKIP LATE ENTRY & DUPLICATE CHECK =================
-                    # FIXED TYPO HERE: currentcandle_ts -> current_candle_ts
                     if active_signals[symbol] is None and last_processed_candle_ts[symbol] != current_candle_ts:
                         
-                        # Asset-Specific Minimum SL Rules
-                        if "ETH" in symbol:
-                            min_sl = 15.0
-                        elif "BTC" in symbol:
-                            min_sl = 200.0
+                        # BTC માટે SL 500 અને TP 1000 પોઈન્ટ્સ ફિક્સ કર્યા છે
+                        if "BTC" in symbol:
+                            sl_dist = 500.0
+                            tp_dist = 1000.0
+                        elif "ETH" in symbol:
+                            sl_dist = round(max(atr * 2.0, 15.0), 2)
+                            tp_dist = round(sl_dist * 2.0, 2)
                         elif "XAUT" in symbol:
-                            min_sl = 5.0
-                        else:
-                            min_sl = 1.0
-
-                        sl_dist = round(max(atr * 2.0, min_sl), 2)
-                        tp_dist = round(sl_dist * 2.0, 2)  # Fixed 1:2 R:R Ratio
+                            sl_dist = round(max(atr * 2.0, 5.0), 2)
+                            tp_dist = round(sl_dist * 2.0, 2)
+                        else:  # SOL
+                            sl_dist = round(max(atr * 2.0, 1.0), 2)
+                            tp_dist = round(sl_dist * 2.0, 2)
 
                         if data["buy_signal"]:
                             sl = round(price - sl_dist, 2)
