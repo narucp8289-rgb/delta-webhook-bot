@@ -16,6 +16,30 @@ SYMBOLS = ["ETH-USDT", "BTC-USDT", "SOL-USDT", "XAUT-USDT"]
 TELEGRAM_TOKEN = "8682624980:AAEBi3mlG6dTnG0DOmq5nJ50HsSLjU0FrFo"
 TELEGRAM_CHAT_ID = "5305261922"
 
+# 🎨 દરેક કોઈન માટે યુનિક કલર કોડેડ ઈમોજીસ
+SYMBOL_CONFIG = {
+    "BTC-USDT": {
+        "tag": "🟧 ₿ [ BITCOIN ] 🟧",
+        "buy_hdr": "🟧🟩 *BUY SIGNAL: BTC-USDT* 🟧🟩",
+        "sell_hdr": "🟧🟥 *SELL SIGNAL: BTC-USDT* 🟧🟥"
+    },
+    "ETH-USDT": {
+        "tag": "🟦 🔷 [ ETHEREUM ] 🟦",
+        "buy_hdr": "🟦🟩 *BUY SIGNAL: ETH-USDT* 🟦🟩",
+        "sell_hdr": "🟦🟥 *SELL SIGNAL: ETH-USDT* 🟦🟥"
+    },
+    "SOL-USDT": {
+        "tag": "🟪 🟣 [ SOLANA ] 🟪",
+        "buy_hdr": "🟪🟩 *BUY SIGNAL: SOL-USDT* 🟪🟩",
+        "sell_hdr": "🟪🟥 *SELL SIGNAL: SOL-USDT* 🟪🟥"
+    },
+    "XAUT-USDT": {
+        "tag": "🟨 🪙 [ GOLD / XAUT ] 🟨",
+        "buy_hdr": "🟨🟩 *BUY SIGNAL: XAUT-USDT* 🟨🟩",
+        "sell_hdr": "🟨🟥 *SELL SIGNAL: XAUT-USDT* 🟨🟥"
+    }
+}
+
 latest_market_data = {}
 last_error = "None"
 active_signals = {symbol: None for symbol in SYMBOLS}  
@@ -143,9 +167,6 @@ def get_cached_htf_trends(symbol):
     return is_double_uptrend, is_double_downtrend, trend_1h, trend_30m
 
 def find_proper_swings(df, lookback=20):
-    """
-    અગાઉની કેન્ડલ્સમાંથી Swing High / Low ગણવા (-3 થી પછળની કેન્ડલ્સ)
-    """
     past_candles = df.iloc[-(lookback + 3):-3] 
     swing_high = float(past_candles["high"].max())
     swing_low = float(past_candles["low"].min())
@@ -164,7 +185,6 @@ def calculate_indicators(symbol):
     df_3m["atr"] = calculate_atr(df_3m, 14)
     df_3m["vol_avg"] = df_3m["volume"].rolling(window=20, min_periods=1).mean()
 
-    # ✅ ૩ મિનિટની જે કેન્ડલ હમણાં જ ક્લોઝ થઈ છે તેને (-2) વડે લેવામાં આવે છે.
     entry_candle = df_3m.iloc[-2]
     candle_ts = str(entry_candle["ts"])
 
@@ -194,11 +214,10 @@ def calculate_indicators(symbol):
     had_proper_pullback_up = sum(recent_candles["high"] > recent_candles["ema_21_3m"]) >= 1
     had_proper_pullback_down = sum(recent_candles["low"] < recent_candles["ema_21_3m"]) >= 1
 
-    # ✅ કન્ડિશન ૧: ૩ મિનિટની કેન્ડલ ક્લોઝ થઈને Swing High તોડે તો જ BUY
     buy_signal = bool(
         is_double_uptrend and 
         had_proper_pullback_down and 
-        (entry_close > swing_high) and # Swing High બ્રેક અને ક્લોઝ
+        (entry_close > swing_high) and 
         (entry_close > ema_21_val) and 
         has_volume_spike_1_5x and 
         has_strong_trend and 
@@ -206,11 +225,10 @@ def calculate_indicators(symbol):
         (rsi_val > 52.0)
     )
 
-    # ✅ કન્ડિશન ૨: ૩ મિનિટની કેન્ડલ ક્લોઝ થઈને Swing Low તોડે તો જ SELL
     sell_signal = bool(
         is_double_downtrend and 
         had_proper_pullback_up and 
-        (entry_close < swing_low) and # Swing Low બ્રેક અને ક્લોઝ
+        (entry_close < swing_low) and 
         (entry_close < ema_21_val) and 
         has_volume_spike_1_5x and 
         has_strong_trend and 
@@ -249,8 +267,10 @@ def alert_bot_loop():
                     low = data["low"]
                     atr = data["atr"]
                     current_candle_ts = data["candle_ts"]
+                    
+                    cfg = SYMBOL_CONFIG.get(symbol, {"tag": symbol, "buy_hdr": f"*BUY: {symbol}*", "sell_hdr": f"*SELL: {symbol}*"})
 
-                    # Active Orders Tracking (SL/TP)
+                    # SL/TP Checking
                     if active_signals[symbol] is not None:
                         act = active_signals[symbol]
                         side = act["side"]
@@ -260,21 +280,21 @@ def alert_bot_loop():
 
                         if side == "BUY":
                             if high >= tp:
-                                send_telegram(f"🎯 *TAKE PROFIT HIT! ({symbol} BUY)*\n\n📌 Entry: ${entry}\n🎯 TP: ${tp}")
+                                send_telegram(f"🎯 *TAKE PROFIT HIT!*\n{cfg['tag']}\n\n📌 Entry: ${entry}\n🎯 TP: ${tp}")
                                 active_signals[symbol] = None
                             elif low <= sl:
-                                send_telegram(f"🛑 *STOP LOSS HIT! ({symbol} BUY)*\n\n📌 Entry: ${entry}\n🛑 SL: ${sl}")
+                                send_telegram(f"🛑 *STOP LOSS HIT!*\n{cfg['tag']}\n\n📌 Entry: ${entry}\n🛑 SL: ${sl}")
                                 active_signals[symbol] = None
 
                         elif side == "SELL":
                             if low <= tp:
-                                send_telegram(f"🎯 *TAKE PROFIT HIT! ({symbol} SELL)*\n\n📌 Entry: ${entry}\n🎯 TP: ${tp}")
+                                send_telegram(f"🎯 *TAKE PROFIT HIT!*\n{cfg['tag']}\n\n📌 Entry: ${entry}\n🎯 TP: ${tp}")
                                 active_signals[symbol] = None
                             elif high >= sl:
-                                send_telegram(f"🛑 *STOP LOSS HIT! ({symbol} SELL)*\n\n📌 Entry: ${entry}\n🛑 SL: ${sl}")
+                                send_telegram(f"🛑 *STOP LOSS HIT!*\n{cfg['tag']}\n\n📌 Entry: ${entry}\n🛑 SL: ${sl}")
                                 active_signals[symbol] = None
 
-                    # ✅ ⚡ કેન્ડલ ક્લોઝ થતાં જ નો-ડિલે ઇન્સ્ટન્ટ મેસેજ
+                    # ⚡ INSTANT COLOR-CODED ALERT EXECUTION
                     if active_signals[symbol] is None and last_processed_candle_ts[symbol] != current_candle_ts:
                         
                         if "BTC" in symbol:
@@ -295,12 +315,15 @@ def alert_bot_loop():
                             active_signals[symbol] = {"side": "BUY", "sl": sl, "tp": tp, "entry": price}
                             last_processed_candle_ts[symbol] = current_candle_ts
                             
-                            msg = (f"🚀 *CONFIRMED BUY SIGNAL ({symbol})*\n\n"
-                                   f"📌 *Entry Price (Close):* ${price}\n"
+                            msg = (f"{cfg['tag']}\n"
+                                   f"{cfg['buy_hdr']}\n"
+                                   f"━━━━━━━━━━━━━━━━━━\n"
+                                   f"📌 *Entry Price:* ${price}\n"
                                    f"🛑 *Stop Loss:* ${sl}\n"
                                    f"🎯 *Take Profit:* ${tp}\n"
-                                   f"📉 *Broken Swing High:* ${data['swing_high']}\n\n"
-                                   f"👉 *Action:* Delta Exchange માં **BUY (LONG)** કરો.")
+                                   f"📉 *Broken High:* ${data['swing_high']}\n"
+                                   f"━━━━━━━━━━━━━━━━━━\n"
+                                   f"👉 Delta Exchange: **BUY / LONG**")
                             send_telegram(msg)
 
                         elif data["sell_signal"]:
@@ -309,18 +332,21 @@ def alert_bot_loop():
                             active_signals[symbol] = {"side": "SELL", "sl": sl, "tp": tp, "entry": price}
                             last_processed_candle_ts[symbol] = current_candle_ts
 
-                            msg = (f"🔻 *CONFIRMED SELL SIGNAL ({symbol})*\n\n"
-                                   f"📌 *Entry Price (Close):* ${price}\n"
+                            msg = (f"{cfg['tag']}\n"
+                                   f"{cfg['sell_hdr']}\n"
+                                   f"━━━━━━━━━━━━━━━━━━\n"
+                                   f"📌 *Entry Price:* ${price}\n"
                                    f"🛑 *Stop Loss:* ${sl}\n"
                                    f"🎯 *Take Profit:* ${tp}\n"
-                                   f"📈 *Broken Swing Low:* ${data['swing_low']}\n\n"
-                                   f"👉 *Action:* Delta Exchange માં **SELL (SHORT)** કરો.")
+                                   f"📈 *Broken Low:* ${data['swing_low']}\n"
+                                   f"━━━━━━━━━━━━━━━━━━\n"
+                                   f"👉 Delta Exchange: **SELL / SHORT**")
                             send_telegram(msg)
 
             except Exception as e:
                 print(f"Loop Error ({symbol}): {e}")
-            time.sleep(0.1) # ફાસ્ટ પ્રોસેસિંગ
-        time.sleep(0.3)     # સતત સ્કેનિંગ
+            time.sleep(0.1)
+        time.sleep(0.3)
 
 threading.Thread(target=alert_bot_loop, daemon=True).start()
 
@@ -329,12 +355,12 @@ def home():
     global latest_market_data, active_signals
     return jsonify({
         "status": "running",
-        "mode": "Fast Candle-Close Confirmed Alert Bot",
+        "mode": "Color-Coded Instant Alert Bot",
         "active_signals": active_signals,
         "market_data": latest_market_data
     })
 
 if __name__ == "__main__":
-    send_telegram("⚡ *Fast Candle-Close Confirmed Bot Active*")
+    send_telegram("⚡ *Color-Coded Instant Alert Bot Active*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
