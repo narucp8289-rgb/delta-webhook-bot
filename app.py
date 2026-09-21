@@ -18,10 +18,9 @@ TELEGRAM_CHAT_ID = "5305261922"
 
 latest_market_data = {}
 last_error = "None"
-active_signals = {symbol: None for symbol in SYMBOLS}  # Dynamic SL/TP Tracking
-last_processed_candle_ts = {symbol: None for symbol in SYMBOLS}  # Prevent Duplicate/Late Entry
+active_signals = {symbol: None for symbol in SYMBOLS}  
+last_processed_candle_ts = {symbol: None for symbol in SYMBOLS}  
 
-# HTF Cache Dictionary to store 30m and 1H trends (5 mins expiration)
 htf_cache = {}
 
 def send_telegram(message):
@@ -41,7 +40,7 @@ def get_candles(symbol, bar="3m", limit=100):
     try:
         params = {"instId": symbol, "bar": bar, "limit": limit}
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-        response = requests.get(OKX_URL, params=params, headers=headers, timeout=10)
+        response = requests.get(OKX_URL, params=params, headers=headers, timeout=4)
         res = response.json()
         
         if res.get("code") == "0" and "data" in res:
@@ -107,9 +106,7 @@ def calculate_atr(df, period=14):
     except Exception as e:
         return pd.Series([15.0] * len(df))
 
-# ================= 1. HIGHER TIMEFRAME CACHING =================
 def get_cached_htf_trends(symbol):
-    """Caches 1H & 30M trend for 5 minutes to prevent API lag and 1-candle entry delay"""
     now = time.time()
     if symbol in htf_cache and (now - htf_cache[symbol]['time']) < 300:
         return htf_cache[symbol]['is_double_uptrend'], htf_cache[symbol]['is_double_downtrend'], htf_cache[symbol]['trend_1h'], htf_cache[symbol]['trend_30m']
@@ -145,22 +142,29 @@ def get_cached_htf_trends(symbol):
 
     return is_double_uptrend, is_double_downtrend, trend_1h, trend_30m
 
+def find_proper_swings(df, lookback=20):
+    """
+    અગાઉની કેન્ડલ્સમાંથી Swing High / Low ગણવા (-3 થી પછળની કેન્ડલ્સ)
+    """
+    past_candles = df.iloc[-(lookback + 3):-3] 
+    swing_high = float(past_candles["high"].max())
+    swing_low = float(past_candles["low"].min())
+    return swing_high, swing_low
+
 def calculate_indicators(symbol):
     df_3m = get_candles(symbol, bar="3m", limit=100)
-    if df_3m is None or len(df_3m) < 25:
+    if df_3m is None or len(df_3m) < 35:
         return None
 
-    # Fetch cached HTF Trends
     is_double_uptrend, is_double_downtrend, trend_1h, trend_30m = get_cached_htf_trends(symbol)
 
-    # 3M Indicators
     df_3m["ema_21_3m"] = df_3m["close"].ewm(span=21, adjust=False).mean()
     df_3m["rsi"] = calculate_rsi(df_3m["close"], 14)
     df_3m["adx"] = calculate_adx(df_3m, 14)
     df_3m["atr"] = calculate_atr(df_3m, 14)
     df_3m["vol_avg"] = df_3m["volume"].rolling(window=20, min_periods=1).mean()
 
-    # ================= 2. INSTANT CANDLE-CLOSE EXECUTION =================
+    # ✅ ૩ મિનિટની જે કેન્ડલ હમણાં જ ક્લોઝ થઈ છે તેને (-2) વડે લેવામાં આવે છે.
     entry_candle = df_3m.iloc[-2]
     candle_ts = str(entry_candle["ts"])
 
@@ -184,34 +188,34 @@ def calculate_indicators(symbol):
     candle_body = abs(entry_close - entry_open)
     is_strong_body = (candle_body / candle_range) >= 0.60
 
-    # Swing High/Low calculation (Last 20 candles before breakout)
-    recent_candles = df_3m.iloc[-22:-2]
-    swing_low = float(recent_candles["low"].min())
-    swing_high = float(recent_candles["high"].max())
+    swing_high, swing_low = find_proper_swings(df_3m, lookback=20)
 
+    recent_candles = df_3m.iloc[-22:-2]
     had_proper_pullback_up = sum(recent_candles["high"] > recent_candles["ema_21_3m"]) >= 1
     had_proper_pullback_down = sum(recent_candles["low"] < recent_candles["ema_21_3m"]) >= 1
 
-    sell_signal = bool(
-        is_double_downtrend and 
-        had_proper_pullback_up and 
-        (entry_close < swing_low) and 
-        (entry_close < ema_21_val) and 
-        has_volume_spike_1_5x and 
-        has_strong_trend and 
-        is_strong_body and 
-        (rsi_val < 48.0)
-    )
-    
+    # ✅ કન્ડિશન ૧: ૩ મિનિટની કેન્ડલ ક્લોઝ થઈને Swing High તોડે તો જ BUY
     buy_signal = bool(
         is_double_uptrend and 
         had_proper_pullback_down and 
-        (entry_close > swing_high) and 
+        (entry_close > swing_high) and # Swing High બ્રેક અને ક્લોઝ
         (entry_close > ema_21_val) and 
         has_volume_spike_1_5x and 
         has_strong_trend and 
         is_strong_body and 
         (rsi_val > 52.0)
+    )
+
+    # ✅ કન્ડિશન ૨: ૩ મિનિટની કેન્ડલ ક્લોઝ થઈને Swing Low તોડે તો જ SELL
+    sell_signal = bool(
+        is_double_downtrend and 
+        had_proper_pullback_up and 
+        (entry_close < swing_low) and # Swing Low બ્રેક અને ક્લોઝ
+        (entry_close < ema_21_val) and 
+        has_volume_spike_1_5x and 
+        has_strong_trend and 
+        is_strong_body and 
+        (rsi_val < 48.0)
     )
 
     return {
@@ -226,9 +230,6 @@ def calculate_indicators(symbol):
         "rsi": round(rsi_val, 2),
         "adx": round(adx_val, 2),
         "atr": round(atr_val, 2),
-        "volume_spike_1_5x": bool(has_volume_spike_1_5x),
-        "strong_body_60pct": bool(is_strong_body),
-        "strong_trend": bool(has_strong_trend),
         "swing_low": round(swing_low, 2),
         "swing_high": round(swing_high, 2),
         "buy_signal": buy_signal,
@@ -249,7 +250,7 @@ def alert_bot_loop():
                     atr = data["atr"]
                     current_candle_ts = data["candle_ts"]
 
-                    # 1. LIVE SL/TP TRACKER
+                    # Active Orders Tracking (SL/TP)
                     if active_signals[symbol] is not None:
                         act = active_signals[symbol]
                         side = act["side"]
@@ -259,31 +260,25 @@ def alert_bot_loop():
 
                         if side == "BUY":
                             if high >= tp:
-                                msg = f"🎯 *TAKE PROFIT HIT! ({symbol} BUY)*\n\n📌 Entry: ${entry}\n🎯 TP Target: ${tp}\n✅ Profit Achieved!"
-                                send_telegram(msg)
+                                send_telegram(f"🎯 *TAKE PROFIT HIT! ({symbol} BUY)*\n\n📌 Entry: ${entry}\n🎯 TP: ${tp}")
                                 active_signals[symbol] = None
                             elif low <= sl:
-                                msg = f"🛑 *STOP LOSS HIT! ({symbol} BUY)*\n\n📌 Entry: ${entry}\n🛑 SL Triggered: ${sl}"
-                                send_telegram(msg)
+                                send_telegram(f"🛑 *STOP LOSS HIT! ({symbol} BUY)*\n\n📌 Entry: ${entry}\n🛑 SL: ${sl}")
                                 active_signals[symbol] = None
 
                         elif side == "SELL":
                             if low <= tp:
-                                msg = f"🎯 *TAKE PROFIT HIT! ({symbol} SELL)*\n\n📌 Entry: ${entry}\n🎯 TP Target: ${tp}\n✅ Profit Achieved!"
-                                send_telegram(msg)
+                                send_telegram(f"🎯 *TAKE PROFIT HIT! ({symbol} SELL)*\n\n📌 Entry: ${entry}\n🎯 TP: ${tp}")
                                 active_signals[symbol] = None
                             elif high >= sl:
-                                msg = f"🛑 *STOP LOSS HIT! ({symbol} SELL)*\n\n📌 Entry: ${entry}\n🛑 SL Triggered: ${sl}"
-                                send_telegram(msg)
+                                send_telegram(f"🛑 *STOP LOSS HIT! ({symbol} SELL)*\n\n📌 Entry: ${entry}\n🛑 SL: ${sl}")
                                 active_signals[symbol] = None
 
-                    # ================= 3. SKIP LATE ENTRY & DUPLICATE CHECK =================
+                    # ✅ ⚡ કેન્ડલ ક્લોઝ થતાં જ નો-ડિલે ઇન્સ્ટન્ટ મેસેજ
                     if active_signals[symbol] is None and last_processed_candle_ts[symbol] != current_candle_ts:
                         
-                        # BTC માટે SL 500 અને TP 1000 પોઈન્ટ્સ ફિક્સ કર્યા છે
                         if "BTC" in symbol:
-                            sl_dist = 500.0
-                            tp_dist = 1000.0
+                            sl_dist, tp_dist = 500.0, 1000.0
                         elif "ETH" in symbol:
                             sl_dist = round(max(atr * 2.0, 15.0), 2)
                             tp_dist = round(sl_dist * 2.0, 2)
@@ -300,11 +295,11 @@ def alert_bot_loop():
                             active_signals[symbol] = {"side": "BUY", "sl": sl, "tp": tp, "entry": price}
                             last_processed_candle_ts[symbol] = current_candle_ts
                             
-                            msg = (f"🚀 *HIGH-ACCURACY BUY SIGNAL ({symbol})*\n\n"
-                                   f"📌 *Entry Price:* ${price}\n"
+                            msg = (f"🚀 *CONFIRMED BUY SIGNAL ({symbol})*\n\n"
+                                   f"📌 *Entry Price (Close):* ${price}\n"
                                    f"🛑 *Stop Loss:* ${sl}\n"
                                    f"🎯 *Take Profit:* ${tp}\n"
-                                   f"📉 *Swing High Breakout:* ${data['swing_high']}\n\n"
+                                   f"📉 *Broken Swing High:* ${data['swing_high']}\n\n"
                                    f"👉 *Action:* Delta Exchange માં **BUY (LONG)** કરો.")
                             send_telegram(msg)
 
@@ -314,18 +309,18 @@ def alert_bot_loop():
                             active_signals[symbol] = {"side": "SELL", "sl": sl, "tp": tp, "entry": price}
                             last_processed_candle_ts[symbol] = current_candle_ts
 
-                            msg = (f"🔻 *HIGH-ACCURACY SELL SIGNAL ({symbol})*\n\n"
-                                   f"📌 *Entry Price:* ${price}\n"
+                            msg = (f"🔻 *CONFIRMED SELL SIGNAL ({symbol})*\n\n"
+                                   f"📌 *Entry Price (Close):* ${price}\n"
                                    f"🛑 *Stop Loss:* ${sl}\n"
                                    f"🎯 *Take Profit:* ${tp}\n"
-                                   f"📈 *Swing Low Breakout:* ${data['swing_low']}\n\n"
+                                   f"📈 *Broken Swing Low:* ${data['swing_low']}\n\n"
                                    f"👉 *Action:* Delta Exchange માં **SELL (SHORT)** કરો.")
                             send_telegram(msg)
 
             except Exception as e:
                 print(f"Loop Error ({symbol}): {e}")
-            time.sleep(1)
-        time.sleep(2)
+            time.sleep(0.1) # ફાસ્ટ પ્રોસેસિંગ
+        time.sleep(0.3)     # સતત સ્કેનિંગ
 
 threading.Thread(target=alert_bot_loop, daemon=True).start()
 
@@ -334,12 +329,12 @@ def home():
     global latest_market_data, active_signals
     return jsonify({
         "status": "running",
-        "mode": "Upgraded Fast Multi-Crypto & Gold Alert Bot (ETH, BTC, SOL, XAUT)",
+        "mode": "Fast Candle-Close Confirmed Alert Bot",
         "active_signals": active_signals,
         "market_data": latest_market_data
     })
 
 if __name__ == "__main__":
-    send_telegram("⚡ *Upgraded Multi-Crypto & Gold Bot Active (ETH, BTC, SOL, XAUT)*")
+    send_telegram("⚡ *Fast Candle-Close Confirmed Bot Active*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
