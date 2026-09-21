@@ -16,7 +16,7 @@ SYMBOLS = ["ETH-USDT", "BTC-USDT", "SOL-USDT", "XAUT-USDT"]
 TELEGRAM_TOKEN = "8682624980:AAEBi3mlG6dTnG0DOmq5nJ50HsSLjU0FrFo"
 TELEGRAM_CHAT_ID = "5305261922"
 
-# 🎨 દરેક કોઈન માટે યુનિક કલર કોડેડ ઈમોજીસ
+# 🎨 કલર કોડેડ બોટ મેસેજ ફોર્મેટ
 SYMBOL_CONFIG = {
     "BTC-USDT": {
         "tag": "🟧 ₿ [ BITCOIN ] 🟧",
@@ -120,16 +120,6 @@ def calculate_adx(df, period=14):
     except Exception as e:
         return pd.Series([0.0] * len(df))
 
-def calculate_atr(df, period=14):
-    try:
-        df['tr'] = np.maximum(
-            df['high'] - df['low'],
-            np.maximum(abs(df['high'] - df['close'].shift(1)), abs(df['low'] - df['close'].shift(1)))
-        )
-        return df['tr'].rolling(window=period).mean().fillna(15.0)
-    except Exception as e:
-        return pd.Series([15.0] * len(df))
-
 def get_cached_htf_trends(symbol):
     now = time.time()
     if symbol in htf_cache and (now - htf_cache[symbol]['time']) < 300:
@@ -166,12 +156,6 @@ def get_cached_htf_trends(symbol):
 
     return is_double_uptrend, is_double_downtrend, trend_1h, trend_30m
 
-def find_proper_swings(df, lookback=20):
-    past_candles = df.iloc[-(lookback + 3):-3] 
-    swing_high = float(past_candles["high"].max())
-    swing_low = float(past_candles["low"].min())
-    return swing_high, swing_low
-
 def calculate_indicators(symbol):
     df_3m = get_candles(symbol, bar="3m", limit=100)
     if df_3m is None or len(df_3m) < 35:
@@ -182,21 +166,23 @@ def calculate_indicators(symbol):
     df_3m["ema_21_3m"] = df_3m["close"].ewm(span=21, adjust=False).mean()
     df_3m["rsi"] = calculate_rsi(df_3m["close"], 14)
     df_3m["adx"] = calculate_adx(df_3m, 14)
-    df_3m["atr"] = calculate_atr(df_3m, 14)
     df_3m["vol_avg"] = df_3m["volume"].rolling(window=20, min_periods=1).mean()
 
-    entry_candle = df_3m.iloc[-2]
-    candle_ts = str(entry_candle["ts"])
+    # 📌 કેન્ડલ્સ વ્યાખ્યાયિત કરો
+    entry_candle = df_3m.iloc[-2]  # ક્લોઝ થયેલી કેન્ડલ
+    prev_candle = df_3m.iloc[-3]   # એના અગાઉની કેન્ડલ
 
+    candle_ts = str(entry_candle["ts"])
     entry_close = float(entry_candle["close"])
     entry_open = float(entry_candle["open"])
     entry_high = float(entry_candle["high"])
     entry_low = float(entry_candle["low"])
     
+    prev_close = float(prev_candle["close"])
+    
     ema_21_val = float(entry_candle["ema_21_3m"])
     rsi_val = float(entry_candle["rsi"])
     adx_val = float(entry_candle["adx"])
-    atr_val = float(entry_candle["atr"])
 
     vol_val = float(entry_candle["volume"])
     vol_avg_val = float(entry_candle["vol_avg"])
@@ -208,16 +194,18 @@ def calculate_indicators(symbol):
     candle_body = abs(entry_close - entry_open)
     is_strong_body = (candle_body / candle_range) >= 0.60
 
-    swing_high, swing_low = find_proper_swings(df_3m, lookback=20)
+    # 📌 સ્વિંગ હાઈ/લો (છેલ્લા 20 બાર્સમાંથી)
+    swing_candles = df_3m.iloc[-22:-2]
+    swing_high = float(swing_candles["high"].max())
+    swing_low = float(swing_candles["low"].min())
 
-    recent_candles = df_3m.iloc[-22:-2]
-    had_proper_pullback_up = sum(recent_candles["high"] > recent_candles["ema_21_3m"]) >= 1
-    had_proper_pullback_down = sum(recent_candles["low"] < recent_candles["ema_21_3m"]) >= 1
+    # ⚡ FRESH BREAKOUT LOGIC: અગાઉની કેન્ડલ સ્વિંગ અંદર હોવી જોઈએ અને આ કેન્ડલે જ બ્રેકઆઉટ આપ્યું હોવું જોઈએ
+    is_fresh_buy_breakout = (prev_close <= swing_high) and (entry_close > swing_high)
+    is_fresh_sell_breakout = (prev_close >= swing_low) and (entry_close < swing_low)
 
     buy_signal = bool(
         is_double_uptrend and 
-        had_proper_pullback_down and 
-        (entry_close > swing_high) and 
+        is_fresh_buy_breakout and 
         (entry_close > ema_21_val) and 
         has_volume_spike_1_5x and 
         has_strong_trend and 
@@ -227,8 +215,7 @@ def calculate_indicators(symbol):
 
     sell_signal = bool(
         is_double_downtrend and 
-        had_proper_pullback_up and 
-        (entry_close < swing_low) and 
+        is_fresh_sell_breakout and 
         (entry_close < ema_21_val) and 
         has_volume_spike_1_5x and 
         has_strong_trend and 
@@ -247,7 +234,6 @@ def calculate_indicators(symbol):
         "ema_21_3m": round(ema_21_val, 2),
         "rsi": round(rsi_val, 2),
         "adx": round(adx_val, 2),
-        "atr": round(atr_val, 2),
         "swing_low": round(swing_low, 2),
         "swing_high": round(swing_high, 2),
         "buy_signal": buy_signal,
@@ -265,12 +251,11 @@ def alert_bot_loop():
                     price = data["price"]
                     high = data["high"]
                     low = data["low"]
-                    atr = data["atr"]
                     current_candle_ts = data["candle_ts"]
                     
                     cfg = SYMBOL_CONFIG.get(symbol, {"tag": symbol, "buy_hdr": f"*BUY: {symbol}*", "sell_hdr": f"*SELL: {symbol}*"})
 
-                    # SL/TP Checking
+                    # SL / TP Tracker Logic
                     if active_signals[symbol] is not None:
                         act = active_signals[symbol]
                         side = act["side"]
@@ -294,20 +279,21 @@ def alert_bot_loop():
                                 send_telegram(f"🛑 *STOP LOSS HIT!*\n{cfg['tag']}\n\n📌 Entry: ${entry}\n🛑 SL: ${sl}")
                                 active_signals[symbol] = None
 
-                    # ⚡ INSTANT COLOR-CODED ALERT EXECUTION
+                    # ⚡ UPDATED FIXED SL / TP DISTANCE SETTINGS
                     if active_signals[symbol] is None and last_processed_candle_ts[symbol] != current_candle_ts:
                         
                         if "BTC" in symbol:
-                            sl_dist, tp_dist = 500.0, 1000.0
+                            sl_dist = 500.0   # Fixed SL $500
+                            tp_dist = 1000.0  # Fixed TP $1000
                         elif "ETH" in symbol:
-                            sl_dist = round(max(atr * 2.0, 15.0), 2)
-                            tp_dist = round(sl_dist * 2.0, 2)
+                            sl_dist = 15.0    # Fixed SL $15
+                            tp_dist = 30.0    # Fixed TP $30
                         elif "XAUT" in symbol:
-                            sl_dist = round(max(atr * 2.0, 5.0), 2)
-                            tp_dist = round(sl_dist * 2.0, 2)
-                        else:  # SOL
-                            sl_dist = round(max(atr * 2.0, 1.0), 2)
-                            tp_dist = round(sl_dist * 2.0, 2)
+                            sl_dist = 5.0     # Fixed SL $5
+                            tp_dist = 10.0    # Fixed TP $10
+                        else:  # SOL-USDT
+                            sl_dist = 1.0     # Fixed SL $1.0
+                            tp_dist = 2.0     # Fixed TP $2.0
 
                         if data["buy_signal"]:
                             sl = round(price - sl_dist, 2)
@@ -355,12 +341,12 @@ def home():
     global latest_market_data, active_signals
     return jsonify({
         "status": "running",
-        "mode": "Color-Coded Instant Alert Bot",
+        "mode": "Fresh Breakout & Custom Fixed SL/TP Bot",
         "active_signals": active_signals,
         "market_data": latest_market_data
     })
 
 if __name__ == "__main__":
-    send_telegram("⚡ *Color-Coded Instant Alert Bot Active*")
+    send_telegram("⚡ *Fresh Breakout & Fixed SL/TP Bot Active*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
