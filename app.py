@@ -11,10 +11,20 @@ app = Flask(__name__)
 
 # ================= CONFIGURATION =================
 OKX_URL = "https://www.okx.com/api/v5/market/candles"
-SYMBOLS = ["ETH-USDT", "BTC-USDT", "SOL-USDT", "XAUT-USDT"]
+
+# XAUT-USDT ની જગ્યાએ GOLD-USDT નામ રાખ્યું છે
+SYMBOLS = ["ETH-USDT", "BTC-USDT", "SOL-USDT", "GOLD-USDT"]
 
 TELEGRAM_TOKEN = "8682624980:AAEBi3mlG6dTnG0DOmq5nJ50HsSLjU0FrFo"
 TELEGRAM_CHAT_ID = "5305261922"
+
+# OKX API માટે સાચો Symbol Mapping (Gold માટે OKX પર XAU-USDT ચાલશે)
+OKX_SYMBOL_MAP = {
+    "BTC-USDT": "BTC-USDT",
+    "ETH-USDT": "ETH-USDT",
+    "SOL-USDT": "SOL-USDT",
+    "GOLD-USDT": "XAU-USDT"
+}
 
 # 🎨 કલર કોડેડ બોટ મેસેજ ફોર્મેટ
 SYMBOL_CONFIG = {
@@ -33,10 +43,10 @@ SYMBOL_CONFIG = {
         "buy_hdr": "🟪🟩 *BUY SIGNAL: SOL-USDT* 🟪🟩",
         "sell_hdr": "🟪🟥 *SELL SIGNAL: SOL-USDT* 🟪🟥"
     },
-    "XAUT-USDT": {
-        "tag": "🟨 🪙 [ GOLD / XAUT ] 🟨",
-        "buy_hdr": "🟨🟩 *BUY SIGNAL: XAUT-USDT* 🟨🟩",
-        "sell_hdr": "🟨🟥 *SELL SIGNAL: XAUT-USDT* 🟨🟥"
+    "GOLD-USDT": {
+        "tag": "🟨 🪙 [ GOLD ] 🟨",
+        "buy_hdr": "🟨🟩 *BUY SIGNAL: GOLD-USDT* 🟨🟩",
+        "sell_hdr": "🟨🟥 *SELL SIGNAL: GOLD-USDT* 🟨🟥"
     }
 }
 
@@ -62,7 +72,8 @@ def send_telegram(message):
 def get_candles(symbol, bar="3m", limit=100):
     global last_error
     try:
-        params = {"instId": symbol, "bar": bar, "limit": limit}
+        okx_symbol = OKX_SYMBOL_MAP.get(symbol, symbol)
+        params = {"instId": okx_symbol, "bar": bar, "limit": limit}
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         response = requests.get(OKX_URL, params=params, headers=headers, timeout=4)
         res = response.json()
@@ -206,10 +217,8 @@ def calculate_indicators(symbol):
         left_high = swing_df.iloc[i-1]["high"]
         right_high = swing_df.iloc[i+1]["high"]
 
-        # U-Turn Condition (Inverted V-Shape)
         is_u_turn_high = (curr_high > left_high) and (curr_high > right_high)
 
-        # 3 Consecutive Green Candles Condition
         c1_green = swing_df.iloc[i]["close"] > swing_df.iloc[i]["open"]
         c2_green = swing_df.iloc[i-1]["close"] > swing_df.iloc[i-1]["open"]
         c3_green = swing_df.iloc[i-2]["close"] > swing_df.iloc[i-2]["open"]
@@ -225,10 +234,8 @@ def calculate_indicators(symbol):
         left_low = swing_df.iloc[i-1]["low"]
         right_low = swing_df.iloc[i+1]["low"]
 
-        # U-Turn Condition (V-Shape)
         is_u_turn_low = (curr_low < left_low) and (curr_low < right_low)
 
-        # 3 Consecutive Red Candles Condition
         c1_red = swing_df.iloc[i]["close"] < swing_df.iloc[i]["open"]
         c2_red = swing_df.iloc[i-1]["close"] < swing_df.iloc[i-1]["open"]
         c3_red = swing_df.iloc[i-2]["close"] < swing_df.iloc[i-2]["open"]
@@ -238,13 +245,11 @@ def calculate_indicators(symbol):
             swing_low = float(curr_low)
             break
 
-    # Safety Fallback: જો કોઈ કારણોસર ફોર્મ્યુલાથી ન મળે તો મેક્સ/મીન લેવું
     if swing_high is None:
         swing_high = float(swing_df["high"].max())
     if swing_low is None:
         swing_low = float(swing_df["low"].min())
 
-    # ⚡ FRESH BREAKOUT LOGIC: અગાઉની કેન્ડલ સ્વિંગ અંદર હોવી જોઈએ અને આ કેન્ડલે જ બ્રેકઆઉટ આપ્યો હોવો જોઈએ
     is_fresh_buy_breakout = (prev_close <= swing_high) and (entry_close > swing_high)
     is_fresh_sell_breakout = (prev_close >= swing_low) and (entry_close < swing_low)
 
@@ -333,7 +338,7 @@ def alert_bot_loop():
                         elif "ETH" in symbol:
                             sl_dist = 15.0    # Fixed SL $15
                             tp_dist = 30.0    # Fixed TP $30
-                        elif "XAUT" in symbol:
+                        elif "GOLD" in symbol:
                             sl_dist = 5.0     # Fixed SL $5
                             tp_dist = 10.0    # Fixed TP $10
                         else:  # SOL-USDT
