@@ -72,14 +72,14 @@ def send_telegram(message):
     except Exception as e:
         print(f"Telegram Error: {e}")
 
-def get_tv_indicators(symbol_key, interval_str=Interval.INTERVAL_1_MINUTE):
+def get_tv_indicators(symbol_key):
     try:
         cfg = SYMBOL_CONFIG[symbol_key]
         handler = TA_Handler(
             symbol=cfg["symbol"],
             exchange=cfg["exchange"],
             screener=cfg["screener"],
-            interval=interval_str
+            interval=Interval.INTERVAL_1_MINUTE
         )
         analysis = handler.get_analysis()
         return analysis.indicators, analysis.summary
@@ -92,8 +92,7 @@ def alert_bot_loop():
     while True:
         for symbol in SYMBOLS:
             try:
-                # 1 મિનિટ કેન્ડલના ટેકનિકલ ઈન્ડીકેટર્સ
-                ind, summary = get_tv_indicators(symbol, Interval.INTERVAL_1_MINUTE)
+                ind, summary = get_tv_indicators(symbol)
                 
                 if ind and summary:
                     price = float(ind.get("close", 0))
@@ -101,18 +100,14 @@ def alert_bot_loop():
                     low = float(ind.get("low", price))
                     rsi = float(ind.get("RSI", 50))
                     ema21 = float(ind.get("EMA21", price))
-                    adx = float(ind.get("ADX", 0))
                     rec = summary.get("RECOMMENDATION", "NEUTRAL")
 
                     cfg = SYMBOL_CONFIG.get(symbol)
 
                     latest_market_data[symbol] = {
                         "price": price,
-                        "high": high,
-                        "low": low,
                         "rsi": round(rsi, 2),
                         "ema21": round(ema21, 2),
-                        "adx": round(adx, 2),
                         "recommendation": rec,
                         "time": get_ist_time()
                     }
@@ -138,7 +133,7 @@ def alert_bot_loop():
                                 send_telegram(f"🛑 *STOP LOSS HIT!*\n{cfg['tag']}\n⏰ *Time:* {get_ist_time()}\n\n📌 Entry: ${entry}\n🛑 SL: ${sl}")
                                 active_signals[symbol] = None
 
-                    # સિગ્નલ લોજિક (TradingView Summary Recommendation મુજબ)
+                    # સિગ્નલ લોજિક
                     current_time_str = datetime.now(IST).strftime('%Y-%m-%d %H:%M')
                     if active_signals[symbol] is None and last_signal_time[symbol] != current_time_str:
                         if "BTC" in symbol:
@@ -150,7 +145,6 @@ def alert_bot_loop():
                         else:
                             sl_dist, tp_dist = 1.0, 2.0
 
-                        # STRONG BUY Signal
                         if rec == "STRONG_BUY" and price > ema21 and rsi > 52:
                             sl = round(price - sl_dist, 2)
                             tp = round(price + tp_dist, 2)
@@ -160,7 +154,6 @@ def alert_bot_loop():
                             msg = (f"{cfg['tag']}\n"
                                    f"{cfg['buy_hdr']}\n"
                                    f"⏰ *Time (IST):* {get_ist_time()}\n"
-                                   f"📊 *Data Match:* TradingView Exact\n"
                                    f"━━━━━━━━━━━━━━━━━━\n"
                                    f"📌 *Entry Price:* ${price}\n"
                                    f"🛑 *Stop Loss:* ${sl}\n"
@@ -170,7 +163,6 @@ def alert_bot_loop():
                                    f"👉 Delta Exchange: **BUY / LONG**")
                             send_telegram(msg)
 
-                        # STRONG SELL Signal
                         elif rec == "STRONG_SELL" and price < ema21 and rsi < 48:
                             sl = round(price + sl_dist, 2)
                             tp = round(price - tp_dist, 2)
@@ -180,7 +172,6 @@ def alert_bot_loop():
                             msg = (f"{cfg['tag']}\n"
                                    f"{cfg['sell_hdr']}\n"
                                    f"⏰ *Time (IST):* {get_ist_time()}\n"
-                                   f"📊 *Data Match:* TradingView Exact\n"
                                    f"━━━━━━━━━━━━━━━━━━\n"
                                    f"📌 *Entry Price:* ${price}\n"
                                    f"🛑 *Stop Loss:* ${sl}\n"
@@ -192,8 +183,12 @@ def alert_bot_loop():
 
             except Exception as e:
                 print(f"Loop error ({symbol}): {e}")
-            time.sleep(1)
-        time.sleep(2)
+            
+            # 📌 રિક્વેસ્ટ વચ્ચે ૩ સેકન્ડનો ગેપ
+            time.sleep(3)
+        
+        # 📌 દરેક સાયકલ પૂરી થયા પછી ૧૫ સેકન્ડનો વિરામ (Rate limit બચાવવા માટે)
+        time.sleep(15)
 
 threading.Thread(target=alert_bot_loop, daemon=True).start()
 
