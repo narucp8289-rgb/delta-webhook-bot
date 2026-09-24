@@ -4,4 +4,4 @@ pandas
 numpy
 pytz
 gunicorn
-tvdatafeed
+tradingview-ta
