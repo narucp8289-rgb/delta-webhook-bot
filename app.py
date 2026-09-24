@@ -5,6 +5,7 @@ import numpy as np
 import threading
 import time
 from datetime import datetime
+import pytz
 from flask import Flask, jsonify
 
 app = Flask(__name__)
@@ -16,7 +17,8 @@ SYMBOLS = ["ETH-USDT", "BTC-USDT", "SOL-USDT", "XAUT-USDT"]
 TELEGRAM_TOKEN = "8682624980:AAEBi3mlG6dTnG0DOmq5nJ50HsSLjU0FrFo"
 TELEGRAM_CHAT_ID = "5305261922"
 
-# 🎨 કલર કોડેડ બોટ મેસેજ ફોર્મેટ
+IST = pytz.timezone('Asia/Kolkata')
+
 SYMBOL_CONFIG = {
     "BTC-USDT": {
         "tag": "🟧 ₿ [ BITCOIN ] 🟧",
@@ -46,6 +48,9 @@ active_signals = {symbol: None for symbol in SYMBOLS}
 last_processed_candle_ts = {symbol: None for symbol in SYMBOLS}  
 
 htf_cache = {}
+
+def get_ist_time():
+    return datetime.now(IST).strftime('%I:%M:%S %p')
 
 def send_telegram(message):
     try:
@@ -168,7 +173,6 @@ def calculate_indicators(symbol):
     df_3m["adx"] = calculate_adx(df_3m, 14)
     df_3m["vol_avg"] = df_3m["volume"].rolling(window=20, min_periods=1).mean()
 
-    # 📌 કેન્ડલ્સ વ્યાખ્યાયિત કરો
     entry_candle = df_3m.iloc[-2]  # ક્લોઝ થયેલી કેન્ડલ
     prev_candle = df_3m.iloc[-3]   # એના અગાઉની કેન્ડલ
 
@@ -200,51 +204,39 @@ def calculate_indicators(symbol):
     swing_high = None
     swing_low = None
 
-    # ૧. PROPER U-TURN & 3 CONSECUTIVE CANDLES CHECK FOR SWING HIGH
-    for i in range(len(swing_df) - 4, 2, -1):
-        curr_high = swing_df.iloc[i]["high"]
-        left_high = swing_df.iloc[i-1]["high"]
-        right_high = swing_df.iloc[i+1]["high"]
-
-        # U-Turn Condition (Inverted V-Shape)
-        is_u_turn_high = (curr_high > left_high) and (curr_high > right_high)
-
-        # 3 Consecutive Green Candles Condition
-        c1_green = swing_df.iloc[i]["close"] > swing_df.iloc[i]["open"]
-        c2_green = swing_df.iloc[i-1]["close"] > swing_df.iloc[i-1]["open"]
-        c3_green = swing_df.iloc[i-2]["close"] > swing_df.iloc[i-2]["open"]
-        is_3_green = c1_green and c2_green and c3_green
-
-        if is_u_turn_high or is_3_green:
-            swing_high = float(curr_high)
-            break
-
-    # ૨. PROPER U-TURN & 3 CONSECUTIVE CANDLES CHECK FOR SWING LOW
-    for i in range(len(swing_df) - 4, 2, -1):
-        curr_low = swing_df.iloc[i]["low"]
-        left_low = swing_df.iloc[i-1]["low"]
-        right_low = swing_df.iloc[i+1]["low"]
-
-        # U-Turn Condition (V-Shape)
-        is_u_turn_low = (curr_low < left_low) and (curr_low < right_low)
-
-        # 3 Consecutive Red Candles Condition
+    # ૧. BUY માટે SWING HIGH: ૩ લાલ કેન્ડલની બિલકુલ અગાઉની કેન્ડલનો High (ટોચ)
+    for i in range(len(swing_df) - 1, 2, -1):
         c1_red = swing_df.iloc[i]["close"] < swing_df.iloc[i]["open"]
         c2_red = swing_df.iloc[i-1]["close"] < swing_df.iloc[i-1]["open"]
         c3_red = swing_df.iloc[i-2]["close"] < swing_df.iloc[i-2]["open"]
-        is_3_red = c1_red and c2_red and c3_red
 
-        if is_u_turn_low or is_3_red:
-            swing_low = float(curr_low)
+        if c1_red and c2_red and c3_red:
+            # ૩ લાલ કેન્ડલ શરૂ થઈ તે પહેલાંની કેન્ડલ (અગાઉનો Peak) અને લાલ કેન્ડલોમાંથી સૌથી ઊંચો High લેવો
+            prev_peak_high = swing_df.iloc[i-3]["high"]
+            red_max_high = max(swing_df.iloc[i]["high"], swing_df.iloc[i-1]["high"], swing_df.iloc[i-2]["high"])
+            swing_high = float(max(prev_peak_high, red_max_high))
             break
 
-    # Safety Fallback: જો કોઈ કારણોસર ફોર્મ્યુલાથી ન મળે તો મેક્સ/મીન લેવું
+    # ૨. SELL માટે SWING LOW: ૩ લીલી કેન્ડલની બિલકુલ અગાઉની કેન્ડલનો Low (તળિયું)
+    for i in range(len(swing_df) - 1, 2, -1):
+        c1_green = swing_df.iloc[i]["close"] > swing_df.iloc[i]["open"]
+        c2_green = swing_df.iloc[i-1]["close"] > swing_df.iloc[i-1]["open"]
+        c3_green = swing_df.iloc[i-2]["close"] > swing_df.iloc[i-2]["open"]
+
+        if c1_green and c2_green and c3_green:
+            # ૩ લીલી કેન્ડલ શરૂ થઈ તે પહેલાંની કેન્ડલ (અગાઉનું Bottom) અને લીલી કેન્ડલોમાંથી સૌથી નીચો Low લેવો
+            prev_bottom_low = swing_df.iloc[i-3]["low"]
+            green_min_low = min(swing_df.iloc[i]["low"], swing_df.iloc[i-1]["low"], swing_df.iloc[i-2]["low"])
+            swing_low = float(min(prev_bottom_low, green_min_low))
+            break
+
+    # Fallback (જો ૩ લાલ/લીલી ન મળે તો)
     if swing_high is None:
         swing_high = float(swing_df["high"].max())
     if swing_low is None:
         swing_low = float(swing_df["low"].min())
 
-    # ⚡ FRESH BREAKOUT LOGIC: અગાઉની કેન્ડલ સ્વિંગ અંદર હોવી જોઈએ અને આ કેન્ડલે જ બ્રેકઆઉટ આપ્યો હોવો જોઈએ
+    # ⚡ FRESH BREAKOUT LOGIC
     is_fresh_buy_breakout = (prev_close <= swing_high) and (entry_close > swing_high)
     is_fresh_sell_breakout = (prev_close >= swing_low) and (entry_close < swing_low)
 
@@ -310,21 +302,21 @@ def alert_bot_loop():
 
                         if side == "BUY":
                             if high >= tp:
-                                send_telegram(f"🎯 *TAKE PROFIT HIT!*\n{cfg['tag']}\n\n📌 Entry: ${entry}\n🎯 TP: ${tp}")
+                                send_telegram(f"🎯 *TAKE PROFIT HIT!*\n{cfg['tag']}\n⏰ *Time:* {get_ist_time()}\n\n📌 Entry: ${entry}\n🎯 TP: ${tp}")
                                 active_signals[symbol] = None
                             elif low <= sl:
-                                send_telegram(f"🛑 *STOP LOSS HIT!*\n{cfg['tag']}\n\n📌 Entry: ${entry}\n🛑 SL: ${sl}")
+                                send_telegram(f"🛑 *STOP LOSS HIT!*\n{cfg['tag']}\n⏰ *Time:* {get_ist_time()}\n\n📌 Entry: ${entry}\n🛑 SL: ${sl}")
                                 active_signals[symbol] = None
 
                         elif side == "SELL":
                             if low <= tp:
-                                send_telegram(f"🎯 *TAKE PROFIT HIT!*\n{cfg['tag']}\n\n📌 Entry: ${entry}\n🎯 TP: ${tp}")
+                                send_telegram(f"🎯 *TAKE PROFIT HIT!*\n{cfg['tag']}\n⏰ *Time:* {get_ist_time()}\n\n📌 Entry: ${entry}\n🎯 TP: ${tp}")
                                 active_signals[symbol] = None
                             elif high >= sl:
-                                send_telegram(f"🛑 *STOP LOSS HIT!*\n{cfg['tag']}\n\n📌 Entry: ${entry}\n🛑 SL: ${sl}")
+                                send_telegram(f"🛑 *STOP LOSS HIT!*\n{cfg['tag']}\n⏰ *Time:* {get_ist_time()}\n\n📌 Entry: ${entry}\n🛑 SL: ${sl}")
                                 active_signals[symbol] = None
 
-                    # ⚡ FIXED SL / TP DISTANCE SETTINGS
+                    # FIXED SL / TP DISTANCE SETTINGS
                     if active_signals[symbol] is None and last_processed_candle_ts[symbol] != current_candle_ts:
                         
                         if "BTC" in symbol:
@@ -348,6 +340,7 @@ def alert_bot_loop():
                             
                             msg = (f"{cfg['tag']}\n"
                                    f"{cfg['buy_hdr']}\n"
+                                   f"⏰ *Time (IST):* {get_ist_time()}\n"
                                    f"━━━━━━━━━━━━━━━━━━\n"
                                    f"📌 *Entry Price:* ${price}\n"
                                    f"🛑 *Stop Loss:* ${sl}\n"
@@ -365,6 +358,7 @@ def alert_bot_loop():
 
                             msg = (f"{cfg['tag']}\n"
                                    f"{cfg['sell_hdr']}\n"
+                                   f"⏰ *Time (IST):* {get_ist_time()}\n"
                                    f"━━━━━━━━━━━━━━━━━━\n"
                                    f"📌 *Entry Price:* ${price}\n"
                                    f"🛑 *Stop Loss:* ${sl}\n"
@@ -376,8 +370,8 @@ def alert_bot_loop():
 
             except Exception as e:
                 print(f"Loop Error ({symbol}): {e}")
-            time.sleep(0.1)
-        time.sleep(0.3)
+            time.sleep(0.05)
+        time.sleep(0.1)
 
 threading.Thread(target=alert_bot_loop, daemon=True).start()
 
@@ -386,12 +380,13 @@ def home():
     global latest_market_data, active_signals
     return jsonify({
         "status": "running",
-        "mode": "Proper Swing & Fresh Breakout Bot",
+        "mode": "Proper Peak Pullback Swing Bot",
+        "time_ist": get_ist_time(),
         "active_signals": active_signals,
         "market_data": latest_market_data
     })
 
 if __name__ == "__main__":
-    send_telegram("⚡ *Proper Swing & Fresh Breakout Bot Active*")
+    send_telegram("⚡ *Proper Peak Pullback Swing Bot Active*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
