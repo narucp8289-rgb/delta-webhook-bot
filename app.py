@@ -72,6 +72,7 @@ def send_telegram(message):
     except Exception as e:
         print(f"Telegram Error: {e}")
 
+# TradingView માંથી ઈન્ડીકેટર ડેટા લાવવા માટે
 def get_tv_indicators(symbol_key):
     try:
         cfg = SYMBOL_CONFIG[symbol_key]
@@ -79,12 +80,19 @@ def get_tv_indicators(symbol_key):
             symbol=cfg["symbol"],
             exchange=cfg["exchange"],
             screener=cfg["screener"],
-            interval=Interval.INTERVAL_1_MINUTE
+            interval=Interval.INTERVAL_1_MINUTE,
+            timeout=10
         )
+        
+        # Custom User-Agent ઉમેરીને રિક્વેસ્ટ મોકલવી જેથી TradingView બ્લોક ન કરે
+        handler.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+        
         analysis = handler.get_analysis()
         return analysis.indicators, analysis.summary
     except Exception as e:
-        print(f"Error fetching TV data for {symbol_key}: {e}")
+        print(f"Error fetching TradingView data for {symbol_key}: {e}")
         return None, None
 
 def alert_bot_loop():
@@ -109,10 +117,11 @@ def alert_bot_loop():
                         "rsi": round(rsi, 2),
                         "ema21": round(ema21, 2),
                         "recommendation": rec,
+                        "source": "TradingView Official",
                         "time": get_ist_time()
                     }
 
-                    # SL / TP ટ્રેકર
+                    # Stop Loss / Take Profit ટ્રેકર
                     if active_signals[symbol] is not None:
                         act = active_signals[symbol]
                         side, sl, tp, entry = act["side"], act["sl"], act["tp"], act["entry"]
@@ -133,7 +142,7 @@ def alert_bot_loop():
                                 send_telegram(f"🛑 *STOP LOSS HIT!*\n{cfg['tag']}\n⏰ *Time:* {get_ist_time()}\n\n📌 Entry: ${entry}\n🛑 SL: ${sl}")
                                 active_signals[symbol] = None
 
-                    # સિગ્નલ લોજિક
+                    # TradingView Recommendation મુજબ સિગ્નલ
                     current_time_str = datetime.now(IST).strftime('%Y-%m-%d %H:%M')
                     if active_signals[symbol] is None and last_signal_time[symbol] != current_time_str:
                         if "BTC" in symbol:
@@ -154,6 +163,7 @@ def alert_bot_loop():
                             msg = (f"{cfg['tag']}\n"
                                    f"{cfg['buy_hdr']}\n"
                                    f"⏰ *Time (IST):* {get_ist_time()}\n"
+                                   f"📊 *Data Source:* TradingView Technicals\n"
                                    f"━━━━━━━━━━━━━━━━━━\n"
                                    f"📌 *Entry Price:* ${price}\n"
                                    f"🛑 *Stop Loss:* ${sl}\n"
@@ -172,6 +182,7 @@ def alert_bot_loop():
                             msg = (f"{cfg['tag']}\n"
                                    f"{cfg['sell_hdr']}\n"
                                    f"⏰ *Time (IST):* {get_ist_time()}\n"
+                                   f"📊 *Data Source:* TradingView Technicals\n"
                                    f"━━━━━━━━━━━━━━━━━━\n"
                                    f"📌 *Entry Price:* ${price}\n"
                                    f"🛑 *Stop Loss:* ${sl}\n"
@@ -184,11 +195,11 @@ def alert_bot_loop():
             except Exception as e:
                 print(f"Loop error ({symbol}): {e}")
             
-            # 📌 રિક્વેસ્ટ વચ્ચે ૩ સેકન્ડનો ગેપ
-            time.sleep(3)
+            # દરેક પેર વચ્ચે ૫ સેકન્ડનો વિરામ
+            time.sleep(5)
         
-        # 📌 દરેક સાયકલ પૂરી થયા પછી ૧૫ સેકન્ડનો વિરામ (Rate limit બચાવવા માટે)
-        time.sleep(15)
+        # આખી સાયકલ પૂરી થયા પછી ૨૦ સેકન્ડનો વિરામ (Rate Limit થી બચવા માટે)
+        time.sleep(20)
 
 threading.Thread(target=alert_bot_loop, daemon=True).start()
 
@@ -196,7 +207,7 @@ threading.Thread(target=alert_bot_loop, daemon=True).start()
 def home():
     return jsonify({
         "status": "running",
-        "data_source": "TradingView Exact Match Indicators",
+        "data_source": "TradingView Live Data",
         "time_ist": get_ist_time(),
         "active_signals": active_signals,
         "market_data": latest_market_data
