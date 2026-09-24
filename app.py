@@ -7,11 +7,13 @@ import time
 from datetime import datetime
 import pytz
 from flask import Flask, jsonify
+from tvdatafeed import TvDatafeed, Interval
 
 app = Flask(__name__)
 
-# ================= CONFIGURATION =================
-OKX_URL = "https://www.okx.com/api/v5/market/candles"
+# TradingView ફ્રી ડેટાબેઝ ઇનિશિયલાઇઝ કરવો (No Premium Required)
+tv = TvDatafeed()
+
 SYMBOLS = ["ETH-USDT", "BTC-USDT", "SOL-USDT", "XAUT-USDT"]
 
 TELEGRAM_TOKEN = "8682624980:AAEBi3mlG6dTnG0DOmq5nJ50HsSLjU0FrFo"
@@ -21,22 +23,22 @@ IST = pytz.timezone('Asia/Kolkata')
 
 SYMBOL_CONFIG = {
     "BTC-USDT": {
-        "tag": "🟧 ₿ [ BITCOIN ] 🟧",
+        "tag": "🟧 ₿ [ BITCOIN - TRADINGVIEW ] 🟧",
         "buy_hdr": "🟧🟩 *BUY SIGNAL: BTC-USDT* 🟧🟩",
         "sell_hdr": "🟧🟥 *SELL SIGNAL: BTC-USDT* 🟧🟥"
     },
     "ETH-USDT": {
-        "tag": "🟦 🔷 [ ETHEREUM ] 🟦",
+        "tag": "🟦 🔷 [ ETHEREUM - TRADINGVIEW ] 🟦",
         "buy_hdr": "🟦🟩 *BUY SIGNAL: ETH-USDT* 🟦🟩",
         "sell_hdr": "🟦🟥 *SELL SIGNAL: ETH-USDT* 🟦🟥"
     },
     "SOL-USDT": {
-        "tag": "🟪 🟣 [ SOLANA ] 🟪",
+        "tag": "🟪 🟣 [ SOLANA - TRADINGVIEW ] 🟪",
         "buy_hdr": "🟪🟩 *BUY SIGNAL: SOL-USDT* 🟪🟩",
         "sell_hdr": "🟪🟥 *SELL SIGNAL: SOL-USDT* 🟪🟥"
     },
     "XAUT-USDT": {
-        "tag": "🟨 🪙 [ GOLD / XAUT ] 🟨",
+        "tag": "🟨 🪙 [ GOLD / XAUT - TRADINGVIEW ] 🟨",
         "buy_hdr": "🟨🟩 *BUY SIGNAL: XAUT-USDT* 🟨🟩",
         "sell_hdr": "🟨🟥 *SELL SIGNAL: XAUT-USDT* 🟨🟥"
     }
@@ -64,29 +66,29 @@ def send_telegram(message):
     except Exception as e:
         print(f"Telegram Error: {e}")
 
-def get_candles(symbol, bar="3m", limit=100):
+# 📌 TRADINGVIEW ચાર્ટ પરથી જ સીધો ડેટા લેવો
+def get_tv_candles(symbol, interval=Interval.in_3_minute, n_bars=100):
     global last_error
     try:
-        params = {"instId": symbol, "bar": bar, "limit": limit}
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-        response = requests.get(OKX_URL, params=params, headers=headers, timeout=4)
-        res = response.json()
+        clean_symbol = symbol.replace("-", "")  # BTC-USDT -> BTCUSDT
+        exchange = "BINANCE"
         
-        if res.get("code") == "0" and "data" in res:
-            raw_data = res["data"]
-            if len(raw_data) > 0:
-                df = pd.DataFrame(raw_data, columns=[
-                    "ts", "open", "high", "low", "close", "volume", 
-                    "volCcy", "volCcyQuote", "confirm"
-                ])
-                for col in ["close", "high", "low", "open", "volume"]:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
+        if "XAUT" in symbol:
+            exchange = "OKX"
+            
+        # TradingView નો જ ઓરિજિનલ ડેટા ફેચ થશે
+        df = tv.get_hist(symbol=clean_symbol, exchange=exchange, interval=interval, n_bars=n_bars)
+        
+        if df is not None and not df.empty:
+            df = df.reset_index()
+            df = df.rename(columns={'datetime': 'ts'})
+            for col in ["close", "high", "low", "open", "volume"]:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
 
-                df = df.iloc[::-1].reset_index(drop=True)
-                df = df.dropna(subset=["close", "high", "low", "volume"]).reset_index(drop=True)
-                return df
+            df = df.dropna(subset=["close", "high", "low", "volume"]).reset_index(drop=True)
+            return df
     except Exception as e:
-        last_error = f"Fetch exception ({symbol} - {bar}): {e}"
+        last_error = f"TradingView Error ({symbol}): {e}"
     return None
 
 def calculate_rsi(close_series, period=14):
@@ -130,8 +132,8 @@ def get_cached_htf_trends(symbol):
     if symbol in htf_cache and (now - htf_cache[symbol]['time']) < 300:
         return htf_cache[symbol]['is_double_uptrend'], htf_cache[symbol]['is_double_downtrend'], htf_cache[symbol]['trend_1h'], htf_cache[symbol]['trend_30m']
 
-    df_1h = get_candles(symbol, bar="1H", limit=50)
-    df_30m = get_candles(symbol, bar="30m", limit=50)
+    df_1h = get_tv_candles(symbol, interval=Interval.in_1_hour, n_bars=50)
+    df_30m = get_tv_candles(symbol, interval=Interval.in_30_minute, n_bars=50)
 
     if df_1h is None or df_30m is None:
         return False, False, "DOWN", "DOWN"
@@ -162,7 +164,7 @@ def get_cached_htf_trends(symbol):
     return is_double_uptrend, is_double_downtrend, trend_1h, trend_30m
 
 def calculate_indicators(symbol):
-    df_3m = get_candles(symbol, bar="3m", limit=100)
+    df_3m = get_tv_candles(symbol, interval=Interval.in_3_minute, n_bars=100)
     if df_3m is None or len(df_3m) < 35:
         return None
 
@@ -198,13 +200,13 @@ def calculate_indicators(symbol):
     candle_body = abs(entry_close - entry_open)
     is_strong_body = (candle_body / candle_range) >= 0.60
 
-    # 📌 સ્વિંગ શોધવા માટેનો ડેટા
+    # 📌 SWING PEAK PULLBACK LOGIC
     swing_df = df_3m.iloc[-27:-2].reset_index(drop=True)
     
     swing_high = None
     swing_low = None
 
-    # ૧. BUY માટે SWING HIGH: ૩ લાલ કેન્ડલની બિલકુલ અગાઉની કેન્ડલનો High (Peak)
+    # BUY SWING HIGH
     for i in range(len(swing_df) - 1, 2, -1):
         c1_red = swing_df.iloc[i]["close"] < swing_df.iloc[i]["open"]
         c2_red = swing_df.iloc[i-1]["close"] < swing_df.iloc[i-1]["open"]
@@ -216,7 +218,7 @@ def calculate_indicators(symbol):
             swing_high = float(max(prev_peak_high, red_max_high))
             break
 
-    # ૨. SELL માટે SWING LOW: ૩ લીલી કેન્ડલની બિલકુલ અગાઉની કેન્ડલનો Low (Bottom)
+    # SELL SWING LOW
     for i in range(len(swing_df) - 1, 2, -1):
         c1_green = swing_df.iloc[i]["close"] > swing_df.iloc[i]["open"]
         c2_green = swing_df.iloc[i-1]["close"] > swing_df.iloc[i-1]["open"]
@@ -228,13 +230,11 @@ def calculate_indicators(symbol):
             swing_low = float(min(prev_bottom_low, green_min_low))
             break
 
-    # Fallback (જો ૩ લાલ/લીલી ન મળે તો)
     if swing_high is None:
         swing_high = float(swing_df["high"].max())
     if swing_low is None:
         swing_low = float(swing_df["low"].min())
 
-    # ⚡ FRESH BREAKOUT LOGIC
     is_fresh_buy_breakout = (prev_close <= swing_high) and (entry_close > swing_high)
     is_fresh_sell_breakout = (prev_close >= swing_low) and (entry_close < swing_low)
 
@@ -314,21 +314,16 @@ def alert_bot_loop():
                                 send_telegram(f"🛑 *STOP LOSS HIT!*\n{cfg['tag']}\n⏰ *Time:* {get_ist_time()}\n\n📌 Entry: ${entry}\n🛑 SL: ${sl}")
                                 active_signals[symbol] = None
 
-                    # FIXED SL / TP DISTANCE SETTINGS
+                    # FIXED SL / TP DISTANCE
                     if active_signals[symbol] is None and last_processed_candle_ts[symbol] != current_candle_ts:
-                        
                         if "BTC" in symbol:
-                            sl_dist = 500.0   # Fixed SL $500
-                            tp_dist = 1000.0  # Fixed TP $1000
+                            sl_dist, tp_dist = 500.0, 1000.0
                         elif "ETH" in symbol:
-                            sl_dist = 15.0    # Fixed SL $15
-                            tp_dist = 30.0    # Fixed TP $30
+                            sl_dist, tp_dist = 15.0, 30.0
                         elif "XAUT" in symbol:
-                            sl_dist = 5.0     # Fixed SL $5
-                            tp_dist = 10.0    # Fixed TP $10
-                        else:  # SOL-USDT
-                            sl_dist = 1.0     # Fixed SL $1.0
-                            tp_dist = 2.0     # Fixed TP $2.0
+                            sl_dist, tp_dist = 5.0, 10.0
+                        else:
+                            sl_dist, tp_dist = 1.0, 2.0
 
                         if data["buy_signal"]:
                             sl = round(price - sl_dist, 2)
@@ -339,6 +334,7 @@ def alert_bot_loop():
                             msg = (f"{cfg['tag']}\n"
                                    f"{cfg['buy_hdr']}\n"
                                    f"⏰ *Time (IST):* {get_ist_time()}\n"
+                                   f"📊 *Data Match:* TradingView Exact\n"
                                    f"━━━━━━━━━━━━━━━━━━\n"
                                    f"📌 *Entry Price:* ${price}\n"
                                    f"🛑 *Stop Loss:* ${sl}\n"
@@ -357,6 +353,7 @@ def alert_bot_loop():
                             msg = (f"{cfg['tag']}\n"
                                    f"{cfg['sell_hdr']}\n"
                                    f"⏰ *Time (IST):* {get_ist_time()}\n"
+                                   f"📊 *Data Match:* TradingView Exact\n"
                                    f"━━━━━━━━━━━━━━━━━━\n"
                                    f"📌 *Entry Price:* ${price}\n"
                                    f"🛑 *Stop Loss:* ${sl}\n"
@@ -368,10 +365,10 @@ def alert_bot_loop():
 
             except Exception as e:
                 print(f"Loop Error ({symbol}): {e}")
-            time.sleep(0.05)
-        time.sleep(0.1)
+            time.sleep(0.5)
+        time.sleep(1)
 
-# બૅકગ્રાઉન્ડ થ્રેડ શરૂ કરવો
+# બૅકગ્રાઉન્ડ થ્રેડ
 threading.Thread(target=alert_bot_loop, daemon=True).start()
 
 @app.route('/')
@@ -379,13 +376,13 @@ def home():
     global latest_market_data, active_signals
     return jsonify({
         "status": "running",
-        "mode": "Proper Peak Pullback Swing Bot",
+        "data_source": "TradingView Exact Match Data",
         "time_ist": get_ist_time(),
         "active_signals": active_signals,
         "market_data": latest_market_data
     })
 
 if __name__ == "__main__":
-    send_telegram("⚡ *Proper Peak Pullback Swing Bot Active*")
+    send_telegram("⚡ *TradingView Pure Data Bot Active*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
