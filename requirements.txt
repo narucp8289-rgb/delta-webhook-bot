@@ -2,3 +2,6 @@ flask
 requests
 pandas
 numpy
+pytz
+gunicorn
+tvdatafeed
