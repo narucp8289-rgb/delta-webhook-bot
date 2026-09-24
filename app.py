@@ -198,33 +198,31 @@ def calculate_indicators(symbol):
     candle_body = abs(entry_close - entry_open)
     is_strong_body = (candle_body / candle_range) >= 0.60
 
-    # 📌 સ્વિંગ શોધવા માટેનો ડેટા (છેલ્લા 25 બાર્સ)
+    # 📌 સ્વિંગ શોધવા માટેનો ડેટા
     swing_df = df_3m.iloc[-27:-2].reset_index(drop=True)
     
     swing_high = None
     swing_low = None
 
-    # ૧. BUY માટે SWING HIGH: ૩ લાલ કેન્ડલની બિલકુલ અગાઉની કેન્ડલનો High (ટોચ)
+    # ૧. BUY માટે SWING HIGH: ૩ લાલ કેન્ડલની બિલકુલ અગાઉની કેન્ડલનો High (Peak)
     for i in range(len(swing_df) - 1, 2, -1):
         c1_red = swing_df.iloc[i]["close"] < swing_df.iloc[i]["open"]
         c2_red = swing_df.iloc[i-1]["close"] < swing_df.iloc[i-1]["open"]
         c3_red = swing_df.iloc[i-2]["close"] < swing_df.iloc[i-2]["open"]
 
         if c1_red and c2_red and c3_red:
-            # ૩ લાલ કેન્ડલ શરૂ થઈ તે પહેલાંની કેન્ડલ (અગાઉનો Peak) અને લાલ કેન્ડલોમાંથી સૌથી ઊંચો High લેવો
             prev_peak_high = swing_df.iloc[i-3]["high"]
             red_max_high = max(swing_df.iloc[i]["high"], swing_df.iloc[i-1]["high"], swing_df.iloc[i-2]["high"])
             swing_high = float(max(prev_peak_high, red_max_high))
             break
 
-    # ૨. SELL માટે SWING LOW: ૩ લીલી કેન્ડલની બિલકુલ અગાઉની કેન્ડલનો Low (તળિયું)
+    # ૨. SELL માટે SWING LOW: ૩ લીલી કેન્ડલની બિલકુલ અગાઉની કેન્ડલનો Low (Bottom)
     for i in range(len(swing_df) - 1, 2, -1):
         c1_green = swing_df.iloc[i]["close"] > swing_df.iloc[i]["open"]
         c2_green = swing_df.iloc[i-1]["close"] > swing_df.iloc[i-1]["open"]
         c3_green = swing_df.iloc[i-2]["close"] > swing_df.iloc[i-2]["open"]
 
         if c1_green and c2_green and c3_green:
-            # ૩ લીલી કેન્ડલ શરૂ થઈ તે પહેલાંની કેન્ડલ (અગાઉનું Bottom) અને લીલી કેન્ડલોમાંથી સૌથી નીચો Low લેવો
             prev_bottom_low = swing_df.iloc[i-3]["low"]
             green_min_low = min(swing_df.iloc[i]["low"], swing_df.iloc[i-1]["low"], swing_df.iloc[i-2]["low"])
             swing_low = float(min(prev_bottom_low, green_min_low))
@@ -292,7 +290,7 @@ def alert_bot_loop():
                     
                     cfg = SYMBOL_CONFIG.get(symbol, {"tag": symbol, "buy_hdr": f"*BUY: {symbol}*", "sell_hdr": f"*SELL: {symbol}*"})
 
-                    # SL / TP Tracker Logic
+                    # SL / TP Tracker
                     if active_signals[symbol] is not None:
                         act = active_signals[symbol]
                         side = act["side"]
@@ -373,6 +371,7 @@ def alert_bot_loop():
             time.sleep(0.05)
         time.sleep(0.1)
 
+# બૅકગ્રાઉન્ડ થ્રેડ શરૂ કરવો
 threading.Thread(target=alert_bot_loop, daemon=True).start()
 
 @app.route('/')
