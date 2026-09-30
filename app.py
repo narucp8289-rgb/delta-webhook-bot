@@ -19,23 +19,23 @@ TELEGRAM_CHAT_ID = "5305261922"
 SYMBOL_CONFIG = {
     "BTC-USDT": {
         "tag": "🟧 ₿ [ BITCOIN ] 🟧",
-        "buy_hdr": "🟧🟩 *BUY SIGNAL (MAJOR ZONE SWEEP)* 🟧🟩",
-        "sell_hdr": "🟧🟥 *SELL SIGNAL (MAJOR ZONE SWEEP)* 🟧🟥"
+        "buy_hdr": "🟧🟩 *BUY SIGNAL (SWEEP LOW SL)* 🟧🟩",
+        "sell_hdr": "🟧🟥 *SELL SIGNAL (SWEEP HIGH SL)* 🟧🟥"
     },
     "ETH-USDT": {
         "tag": "🟦 🔷 [ ETHEREUM ] 🟦",
-        "buy_hdr": "🟦🟩 *BUY SIGNAL (MAJOR ZONE SWEEP)* 🟦🟩",
-        "sell_hdr": "🟦🟥 *SELL SIGNAL (MAJOR ZONE SWEEP)* 🟦🟥"
+        "buy_hdr": "🟦🟩 *BUY SIGNAL (SWEEP LOW SL)* 🟦🟩",
+        "sell_hdr": "🟦🟥 *SELL SIGNAL (SWEEP HIGH SL)* 🟦🟥"
     },
     "SOL-USDT": {
         "tag": "🟪 🟣 [ SOLANA ] 🟪",
-        "buy_hdr": "🟪🟩 *BUY SIGNAL (MAJOR ZONE SWEEP)* 🟪🟩",
-        "sell_hdr": "🟪🟥 *SELL SIGNAL (MAJOR ZONE SWEEP)* 🟪🟥"
+        "buy_hdr": "🟪🟩 *BUY SIGNAL (SWEEP LOW SL)* 🟪🟩",
+        "sell_hdr": "🟪🟥 *SELL SIGNAL (SWEEP HIGH SL)* 🟪🟥"
     },
     "XAUT-USDT": {
         "tag": "🟨 🪙 [ GOLD / XAUT ] 🟨",
-        "buy_hdr": "🟨🟩 *BUY SIGNAL (MAJOR ZONE SWEEP)* 🟨🟩",
-        "sell_hdr": "🟨🟥 *SELL SIGNAL (MAJOR ZONE SWEEP)* 🟨🟥"
+        "buy_hdr": "🟨🟩 *BUY SIGNAL (SWEEP LOW SL)* 🟨🟩",
+        "sell_hdr": "🟨🟥 *SELL SIGNAL (SWEEP HIGH SL)* 🟨🟥"
     }
 }
 
@@ -83,29 +83,24 @@ def get_candles(symbol, bar="15m", limit=100):
 
 def find_major_zones(df):
     """
-    છેલ્લા 60 કલાક/કેન્ડલ્સના ડેટામાંથી માત્ર મેજર (મજબૂત) Swing High અને Swing Low ઝોન શોધવું.
-    5-Candle Fractal Structure વડે મેજર ઝોન નક્કી થાય છે.
+    મેજર સપોર્ટ અને રેઝિસ્ટન્સ ઝોન શોધવું
     """
     major_highs = []
     major_lows = []
 
-    # તાજેતરની 3 કેન્ડલ છોડીને પાછળના ડેટામાં મજબૂત પીવોટ શોધો
     for i in range(len(df) - 5, 5, -1):
-        # Major Resistance (Inverted V-Shape Pivot)
         if (df.iloc[i]['high'] > df.iloc[i-1]['high'] and 
             df.iloc[i]['high'] > df.iloc[i-2]['high'] and 
             df.iloc[i]['high'] > df.iloc[i+1]['high'] and 
             df.iloc[i]['high'] > df.iloc[i+2]['high']):
             major_highs.append(float(df.iloc[i]['high']))
 
-        # Major Support (V-Shape Pivot)
         if (df.iloc[i]['low'] < df.iloc[i-1]['low'] and 
             df.iloc[i]['low'] < df.iloc[i-2]['low'] and 
             df.iloc[i]['low'] < df.iloc[i+1]['low'] and 
             df.iloc[i]['low'] < df.iloc[i+2]['low']):
             major_lows.append(float(df.iloc[i]['low']))
 
-    # સૌથી મજબૂત હાઈ અને લો પસંદ કરો
     major_high = max(major_highs) if major_highs else float(df.iloc[-35:-3]['high'].max())
     major_low = min(major_lows) if major_lows else float(df.iloc[-35:-3]['low'].min())
 
@@ -116,7 +111,6 @@ def calculate_indicators(symbol):
     if df_15m is None or len(df_15m) < 40:
         return None
 
-    # તાજેતરમાં ક્લોઝ થયેલી સિગ્નલ કેન્ડલ
     entry_candle = df_15m.iloc[-2]
     
     candle_ts = str(entry_candle["ts"])
@@ -125,25 +119,23 @@ def calculate_indicators(symbol):
     entry_high = float(entry_candle["high"])
     entry_low = float(entry_candle["low"])
 
-    # 📌 મજબૂત (Major) ઝોન શોધવું
     major_high, major_low = find_major_zones(df_15m)
 
     is_red = entry_close < entry_open
     is_green = entry_close > entry_open
 
-    # 📌 MAJOR LIQUIDITY SWEEP ENTRY LOGIC
-    # SELL: High એ Major High ને Sweep કર્યો, ક્લોઝ નીચે આપ્યું અને Red Candle બની
-    sell_signal = bool((entry_high > major_high) and (entry_close < major_high) and is_red)
+    # 📌 SELL: Green Candle Low Entry & Sweep Candle High SL
+    sell_signal = bool((entry_high > major_high) and (entry_close < major_high) and is_green)
 
-    # BUY: Low એ Major Low ને Sweep કર્યો, ક્લોઝ ઉપર આપ્યું અને Green Candle બની
-    buy_signal = bool((entry_low < major_low) and (entry_close > major_low) and is_green)
+    # 📌 BUY: Red Candle Low Entry & Sweep Candle Low SL
+    buy_signal = bool((entry_low < major_low) and (entry_close > major_low) and is_red)
 
     return {
         "symbol": symbol,
         "candle_ts": candle_ts,
         "price": round(entry_close, 2),
-        "high": round(entry_high, 2),
-        "low": round(entry_low, 2),
+        "high": round(entry_high, 2),        # Sweep Candle High (SL for Sell)
+        "low": round(entry_low, 2),          # Sweep Candle Low (SL for Buy)
         "open": round(entry_open, 2),
         "major_high": round(major_high, 2),
         "major_low": round(major_low, 2),
@@ -163,7 +155,6 @@ def alert_bot_loop():
                     
                     cfg = SYMBOL_CONFIG.get(symbol, {"tag": symbol, "buy_hdr": f"*BUY: {symbol}*", "sell_hdr": f"*SELL: {symbol}*"})
 
-                    # Live Price Tracker (1m Candle)
                     curr_df = get_candles(symbol, bar="1m", limit=2)
                     if curr_df is not None and len(curr_df) > 0:
                         live_high = float(curr_df.iloc[-1]["high"])
@@ -181,7 +172,7 @@ def alert_bot_loop():
 
                         if side == "BUY":
                             if live_high >= tp:
-                                send_telegram(f"🎯 *TAKE PROFIT HIT (1:2)!*\n{cfg['tag']}\n\n📌 Entry: ${entry}\n🎯 TP: ${tp}")
+                                send_telegram(f"🎯 *TAKE PROFIT HIT!*\n{cfg['tag']}\n\n📌 Entry: ${entry}\n🎯 TP: ${tp}")
                                 active_signals[symbol] = None
                             elif live_low <= sl:
                                 send_telegram(f"🛑 *STOP LOSS HIT!*\n{cfg['tag']}\n\n📌 Entry: ${entry}\n🛑 SL: ${sl}")
@@ -189,55 +180,53 @@ def alert_bot_loop():
 
                         elif side == "SELL":
                             if live_low <= tp:
-                                send_telegram(f"🎯 *TAKE PROFIT HIT (1:2)!*\n{cfg['tag']}\n\n📌 Entry: ${entry}\n🎯 TP: ${tp}")
+                                send_telegram(f"🎯 *TAKE PROFIT HIT!*\n{cfg['tag']}\n\n📌 Entry: ${entry}\n🎯 TP: ${tp}")
                                 active_signals[symbol] = None
                             elif live_high >= sl:
                                 send_telegram(f"🛑 *STOP LOSS HIT!*\n{cfg['tag']}\n\n📌 Entry: ${entry}\n🛑 SL: ${sl}")
                                 active_signals[symbol] = None
 
-                    # ⚡ NEW SIGNAL GENERATION (EXACT 1:2 RISK REWARD)
+                    # New Signal Processing
                     if active_signals[symbol] is None and last_processed_candle_ts[symbol] != current_candle_ts:
 
-                        # 1. SELL SIGNAL
+                        # 📌 SELL SIGNAL
                         if data["sell_signal"]:
-                            entry_price = data["price"]    # Red Candle Close
-                            sl = data["high"]              # Red Candle High
-                            risk = sl - entry_price
+                            entry_price = data["low"]      # Green Candle Low Entry
+                            sl = data["high"]              # 🛑 SL = Sweep Candle High
+                            tp = data["major_low"]         # Target = Major Support
 
-                            if risk > 0:
-                                tp = round(entry_price - (risk * 2), 2)  # 1:2 Target
+                            if sl > entry_price and entry_price > tp:
                                 active_signals[symbol] = {"side": "SELL", "sl": sl, "tp": tp, "entry": entry_price}
                                 last_processed_candle_ts[symbol] = current_candle_ts
 
                                 msg = (f"{cfg['tag']}\n"
                                        f"{cfg['sell_hdr']}\n"
                                        f"━━━━━━━━━━━━━━━━━━\n"
-                                       f"🛡️ *Swept Major Resistance:* ${data['major_high']}\n"
-                                       f"📌 *Entry Price (Red Close):* ${entry_price}\n"
-                                       f"🛑 *Stop Loss (Candle High):* ${sl}\n"
-                                       f"🎯 *Take Profit (1:2 RR):* ${tp}\n"
+                                       f"🛡️️ *Swept Resistance:* ${data['major_high']}\n"
+                                       f"📌 *Entry (Green Candle Low):* ${entry_price}\n"
+                                       f"🛑 *Stop Loss (Sweep High):* ${sl}\n"
+                                       f"🎯 *Target (Major Support):* ${tp}\n"
                                        f"━━━━━━━━━━━━━━━━━━\n"
                                        f"👉 Direction: **SELL / SHORT**")
                                 send_telegram(msg)
 
-                        # 2. BUY SIGNAL
+                        # 📌 BUY SIGNAL
                         elif data["buy_signal"]:
-                            entry_price = data["price"]    # Green Candle Close
-                            sl = data["low"]               # Green Candle Low
-                            risk = entry_price - sl
+                            entry_price = data["low"]      # Red Candle Low Entry
+                            sl = data["low"]               # 🛑 SL = Sweep Candle Low
+                            tp = data["major_high"]        # Target = Major Resistance
 
-                            if risk > 0:
-                                tp = round(entry_price + (risk * 2), 2)  # 1:2 Target
+                            if tp > entry_price:
                                 active_signals[symbol] = {"side": "BUY", "sl": sl, "tp": tp, "entry": entry_price}
                                 last_processed_candle_ts[symbol] = current_candle_ts
 
                                 msg = (f"{cfg['tag']}\n"
                                        f"{cfg['buy_hdr']}\n"
                                        f"━━━━━━━━━━━━━━━━━━\n"
-                                       f"🛡️ *Swept Major Support:* ${data['major_low']}\n"
-                                       f"📌 *Entry Price (Green Close):* ${entry_price}\n"
-                                       f"🛑 *Stop Loss (Candle Low):* ${sl}\n"
-                                       f"🎯 *Take Profit (1:2 RR):* ${tp}\n"
+                                       f"🛡️ *Swept Support:* ${data['major_low']}\n"
+                                       f"📌 *Entry (Red Candle Low):* ${entry_price}\n"
+                                       f"🛑 *Stop Loss (Sweep Low):* ${sl}\n"
+                                       f"🎯 *Target (Major Resistance):* ${tp}\n"
                                        f"━━━━━━━━━━━━━━━━━━\n"
                                        f"👉 Direction: **BUY / LONG**")
                                 send_telegram(msg)
@@ -254,12 +243,12 @@ def home():
     global latest_market_data, active_signals
     return jsonify({
         "status": "running",
-        "mode": "Major Zone Liquidity Sweep Bot (1:2 RR)",
+        "mode": "Sweep Candle High/Low SL Bot",
         "active_signals": active_signals,
         "market_data": latest_market_data
     })
 
 if __name__ == "__main__":
-    send_telegram("⚡ *Major Zone Liquidity Sweep Bot Active*")
+    send_telegram("⚡ *Sweep Candle High/Low SL Bot Active*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
