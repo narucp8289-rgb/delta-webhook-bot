@@ -18,24 +18,24 @@ TELEGRAM_CHAT_ID = "5305261922"
 
 SYMBOL_CONFIG = {
     "BTC-USDT": {
-        "tag": "🟧 ₿ [ BITCOIN ] 🟧",
-        "buy_hdr": "🟧🟩 *BUY SIGNAL (SWEEP LOW SL)* 🟧🟩",
-        "sell_hdr": "🟧🟥 *SELL SIGNAL (SWEEP HIGH SL)* 🟧🟥"
+        "tag": "🟧 ₿ BITCOIN 🟧",
+        "buy_hdr": "🟩 BUY SIGNAL: BTC-USDT 🟩",
+        "sell_hdr": "🟥 SELL SIGNAL: BTC-USDT 🟥"
     },
     "ETH-USDT": {
-        "tag": "🟦 🔷 [ ETHEREUM ] 🟦",
-        "buy_hdr": "🟦🟩 *BUY SIGNAL (SWEEP LOW SL)* 🟦🟩",
-        "sell_hdr": "🟦🟥 *SELL SIGNAL (SWEEP HIGH SL)* 🟦🟥"
+        "tag": "🟦 🔷 ETHEREUM 🟦",
+        "buy_hdr": "🟩 BUY SIGNAL: ETH-USDT 🟩",
+        "sell_hdr": "🟥 SELL SIGNAL: ETH-USDT 🟥"
     },
     "SOL-USDT": {
-        "tag": "🟪 🟣 [ SOLANA ] 🟪",
-        "buy_hdr": "🟪🟩 *BUY SIGNAL (SWEEP LOW SL)* 🟪🟩",
-        "sell_hdr": "🟪🟥 *SELL SIGNAL (SWEEP HIGH SL)* 🟪🟥"
+        "tag": "🟪 🟣 SOLANA 🟪",
+        "buy_hdr": "🟪🟩 BUY SIGNAL: SOL-USDT 🟪🟩",
+        "sell_hdr": "🟪🟥 SELL SIGNAL: SOL-USDT 🟪🟥"
     },
     "XAUT-USDT": {
-        "tag": "🟨 🪙 [ GOLD / XAUT ] 🟨",
-        "buy_hdr": "🟨🟩 *BUY SIGNAL (SWEEP LOW SL)* 🟨🟩",
-        "sell_hdr": "🟨🟥 *SELL SIGNAL (SWEEP HIGH SL)* 🟨🟥"
+        "tag": "🟨 🪙 GOLD / XAUT 🟨",
+        "buy_hdr": "🟨🟩 BUY SIGNAL: XAUT-USDT 🟨🟩",
+        "sell_hdr": "🟨🟥 SELL SIGNAL: XAUT-USDT 🟨🟥"
     }
 }
 
@@ -82,9 +82,6 @@ def get_candles(symbol, bar="15m", limit=100):
     return None
 
 def find_major_zones(df):
-    """
-    મેજર સપોર્ટ અને રેઝિસ્ટન્સ ઝોન શોધવું
-    """
     major_highs = []
     major_lows = []
 
@@ -124,18 +121,18 @@ def calculate_indicators(symbol):
     is_red = entry_close < entry_open
     is_green = entry_close > entry_open
 
-    # 📌 SELL: Green Candle Low Entry & Sweep Candle High SL
+    # 📌 SELL Signal Condition (Green Candle Low)
     sell_signal = bool((entry_high > major_high) and (entry_close < major_high) and is_green)
 
-    # 📌 BUY: Red Candle Low Entry & Sweep Candle Low SL
+    # 📌 BUY Signal Condition (Red Candle Low)
     buy_signal = bool((entry_low < major_low) and (entry_close > major_low) and is_red)
 
     return {
         "symbol": symbol,
         "candle_ts": candle_ts,
         "price": round(entry_close, 2),
-        "high": round(entry_high, 2),        # Sweep Candle High (SL for Sell)
-        "low": round(entry_low, 2),          # Sweep Candle Low (SL for Buy)
+        "high": round(entry_high, 2),
+        "low": round(entry_low, 2),
         "open": round(entry_open, 2),
         "major_high": round(major_high, 2),
         "major_low": round(major_low, 2),
@@ -162,7 +159,7 @@ def alert_bot_loop():
                     else:
                         live_high, live_low = data["high"], data["low"]
 
-                    # Active Positions SL / TP Tracking
+                    # 📌 Target / Stop Loss Auto Tracking Message Format
                     if active_signals[symbol] is not None:
                         act = active_signals[symbol]
                         side = act["side"]
@@ -186,14 +183,17 @@ def alert_bot_loop():
                                 send_telegram(f"🛑 *STOP LOSS HIT!*\n{cfg['tag']}\n\n📌 Entry: ${entry}\n🛑 SL: ${sl}")
                                 active_signals[symbol] = None
 
-                    # New Signal Processing
+                    # 📌 New Signal Generation (તમારા જૂના ઈમેજ વાળા સ્ટાઈલ પ્રમાણે)
                     if active_signals[symbol] is None and last_processed_candle_ts[symbol] != current_candle_ts:
 
-                        # 📌 SELL SIGNAL
+                        # 1. SELL SIGNAL
                         if data["sell_signal"]:
-                            entry_price = data["low"]      # Green Candle Low Entry
-                            sl = data["high"]              # 🛑 SL = Sweep Candle High
-                            tp = data["major_low"]         # Target = Major Support
+                            entry_price = data["low"]      # Entry Price
+                            sl = data["high"]              # SL = High
+                            tp = data["major_low"]         # Target
+
+                            sl_pts = round(abs(sl - entry_price), 2)
+                            tp_pts = round(abs(entry_price - tp), 2)
 
                             if sl > entry_price and entry_price > tp:
                                 active_signals[symbol] = {"side": "SELL", "sl": sl, "tp": tp, "entry": entry_price}
@@ -202,19 +202,22 @@ def alert_bot_loop():
                                 msg = (f"{cfg['tag']}\n"
                                        f"{cfg['sell_hdr']}\n"
                                        f"━━━━━━━━━━━━━━━━━━\n"
-                                       f"🛡️️ *Swept Resistance:* ${data['major_high']}\n"
-                                       f"📌 *Entry (Green Candle Low):* ${entry_price}\n"
-                                       f"🛑 *Stop Loss (Sweep High):* ${sl}\n"
-                                       f"🎯 *Target (Major Support):* ${tp}\n"
+                                       f"📌 Entry Price: ${entry_price}\n"
+                                       f"🛑 Stop Loss: ${sl} (*{sl_pts} Points*)\n"
+                                       f"🎯 Take Profit: ${tp} (*{tp_pts} Points*)\n"
+                                       f"📈 Broken High: ${data['major_high']}\n"
                                        f"━━━━━━━━━━━━━━━━━━\n"
-                                       f"👉 Direction: **SELL / SHORT**")
+                                       f"👉 Delta Exchange: SELL / SHORT")
                                 send_telegram(msg)
 
-                        # 📌 BUY SIGNAL
+                        # 2. BUY SIGNAL
                         elif data["buy_signal"]:
-                            entry_price = data["low"]      # Red Candle Low Entry
-                            sl = data["low"]               # 🛑 SL = Sweep Candle Low
-                            tp = data["major_high"]        # Target = Major Resistance
+                            entry_price = data["low"]      # Entry Price
+                            sl = data["low"]               # SL = Low
+                            tp = data["major_high"]        # Target
+
+                            sl_pts = round(abs(entry_price - sl), 2)
+                            tp_pts = round(abs(tp - entry_price), 2)
 
                             if tp > entry_price:
                                 active_signals[symbol] = {"side": "BUY", "sl": sl, "tp": tp, "entry": entry_price}
@@ -223,12 +226,12 @@ def alert_bot_loop():
                                 msg = (f"{cfg['tag']}\n"
                                        f"{cfg['buy_hdr']}\n"
                                        f"━━━━━━━━━━━━━━━━━━\n"
-                                       f"🛡️ *Swept Support:* ${data['major_low']}\n"
-                                       f"📌 *Entry (Red Candle Low):* ${entry_price}\n"
-                                       f"🛑 *Stop Loss (Sweep Low):* ${sl}\n"
-                                       f"🎯 *Target (Major Resistance):* ${tp}\n"
+                                       f"📌 Entry Price: ${entry_price}\n"
+                                       f"🛑 Stop Loss: ${sl} (*{sl_pts} Points*)\n"
+                                       f"🎯 Take Profit: ${tp} (*{tp_pts} Points*)\n"
+                                       f"📉 Broken Low: ${data['major_low']}\n"
                                        f"━━━━━━━━━━━━━━━━━━\n"
-                                       f"👉 Direction: **BUY / LONG**")
+                                       f"👉 Delta Exchange: BUY / LONG")
                                 send_telegram(msg)
 
             except Exception as e:
@@ -243,12 +246,12 @@ def home():
     global latest_market_data, active_signals
     return jsonify({
         "status": "running",
-        "mode": "Sweep Candle High/Low SL Bot",
+        "mode": "Custom Image Layout Bot",
         "active_signals": active_signals,
         "market_data": latest_market_data
     })
 
 if __name__ == "__main__":
-    send_telegram("⚡ *Sweep Candle High/Low SL Bot Active*")
+    send_telegram("⚡ *Major Zone Sweep Bot Active*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
