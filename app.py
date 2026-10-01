@@ -121,18 +121,18 @@ def calculate_indicators(symbol):
     is_red = entry_close < entry_open
     is_green = entry_close > entry_open
 
-    # 📌 SELL Signal Condition (Green Candle Low)
+    # 📌 SELL: Major Resistance સ્વીપ કરીને બની Green કેન્ડલ
     sell_signal = bool((entry_high > major_high) and (entry_close < major_high) and is_green)
 
-    # 📌 BUY Signal Condition (Red Candle Low)
+    # 📌 BUY: Major Support સ્વીપ કરીને બની Red કેન્ડલ
     buy_signal = bool((entry_low < major_low) and (entry_close > major_low) and is_red)
 
     return {
         "symbol": symbol,
         "candle_ts": candle_ts,
-        "price": round(entry_close, 2),
-        "high": round(entry_high, 2),
-        "low": round(entry_low, 2),
+        "price": round(entry_close, 2),     # Entry Price (Close)
+        "high": round(entry_high, 2),       # High (SL for Sell)
+        "low": round(entry_low, 2),         # Low (SL for Buy)
         "open": round(entry_open, 2),
         "major_high": round(major_high, 2),
         "major_low": round(major_low, 2),
@@ -159,7 +159,7 @@ def alert_bot_loop():
                     else:
                         live_high, live_low = data["high"], data["low"]
 
-                    # 📌 Target / Stop Loss Auto Tracking Message Format
+                    # 📌 Active Positions SL / TP Tracking
                     if active_signals[symbol] is not None:
                         act = active_signals[symbol]
                         side = act["side"]
@@ -183,19 +183,19 @@ def alert_bot_loop():
                                 send_telegram(f"🛑 *STOP LOSS HIT!*\n{cfg['tag']}\n\n📌 Entry: ${entry}\n🛑 SL: ${sl}")
                                 active_signals[symbol] = None
 
-                    # 📌 New Signal Generation (તમારા જૂના ઈમેજ વાળા સ્ટાઈલ પ્રમાણે)
+                    # 📌 Signal Generation
                     if active_signals[symbol] is None and last_processed_candle_ts[symbol] != current_candle_ts:
 
                         # 1. SELL SIGNAL
                         if data["sell_signal"]:
-                            entry_price = data["low"]      # Entry Price
-                            sl = data["high"]              # SL = High
-                            tp = data["major_low"]         # Target
+                            entry_price = data["price"]    # Green Candle Close
+                            sl = data["high"]              # Green Candle High (SL)
+                            tp = data["major_low"]         # Target: Major Support Zone
 
                             sl_pts = round(abs(sl - entry_price), 2)
                             tp_pts = round(abs(entry_price - tp), 2)
 
-                            if sl > entry_price and entry_price > tp:
+                            if sl > entry_price and entry_price > tp and sl_pts > 0:
                                 active_signals[symbol] = {"side": "SELL", "sl": sl, "tp": tp, "entry": entry_price}
                                 last_processed_candle_ts[symbol] = current_candle_ts
 
@@ -212,14 +212,14 @@ def alert_bot_loop():
 
                         # 2. BUY SIGNAL
                         elif data["buy_signal"]:
-                            entry_price = data["low"]      # Entry Price
-                            sl = data["low"]               # SL = Low
-                            tp = data["major_high"]        # Target
+                            entry_price = data["price"]    # Red Candle Close
+                            sl = data["low"]               # Red Candle Low (SL)
+                            tp = data["major_high"]        # Target: Major Resistance Zone
 
                             sl_pts = round(abs(entry_price - sl), 2)
                             tp_pts = round(abs(tp - entry_price), 2)
 
-                            if tp > entry_price:
+                            if entry_price > sl and tp > entry_price and sl_pts > 0:
                                 active_signals[symbol] = {"side": "BUY", "sl": sl, "tp": tp, "entry": entry_price}
                                 last_processed_candle_ts[symbol] = current_candle_ts
 
@@ -246,12 +246,12 @@ def home():
     global latest_market_data, active_signals
     return jsonify({
         "status": "running",
-        "mode": "Custom Image Layout Bot",
+        "mode": "Fixed Sweep Candle SL & Points Bot",
         "active_signals": active_signals,
         "market_data": latest_market_data
     })
 
 if __name__ == "__main__":
-    send_telegram("⚡ *Major Zone Sweep Bot Active*")
+    send_telegram("⚡ *Fixed Sweep Candle SL & Points Bot Active*")
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
