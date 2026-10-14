@@ -16,28 +16,28 @@ SYMBOLS = ["PAXG-USDT", "ETH-USDT", "BTC-USDT", "SOL-USDT"]
 TELEGRAM_TOKEN = "8682624980:AAEBi3mlG6dTnG0DOmq5nJ50HsSLjU0FrFo"
 TELEGRAM_CHAT_ID = "5305261922"
 
-# Gold Sweep Strategy Parameters
-SL_DIST = 1.00  # 100 ticks = $1.00
-TP_DIST = 2.00  # 200 ticks = $2.00
+# Strategy Parameters (SL = $1.00 / 100 ticks, TP = $2.00 / 200 ticks)
+SL_DIST = 1.00  
+TP_DIST = 2.00  
 
 SYMBOL_CONFIG = {
     "PAXG-USDT": {
-        "tag": "🟨 🪙 GOLD / PAXG 🟨",
+        "tag": "🟨 🪙 GOLD / PAXG (15m) 🟨",
         "buy_hdr": "🟩 BUY SIGNAL: PAXG-USDT 🟩",
         "sell_hdr": "🟥 SELL SIGNAL: PAXG-USDT 🟥",
     },
     "BTC-USDT": {
-        "tag": "🟧 ₿ BITCOIN 🟧",
+        "tag": "🟧 ₿ BITCOIN (15m) 🟧",
         "buy_hdr": "🟩 BUY SIGNAL: BTC-USDT 🟩",
         "sell_hdr": "🟥 SELL SIGNAL: BTC-USDT 🟥",
     },
     "ETH-USDT": {
-        "tag": "🟦 🔷 ETHEREUM 🟦",
+        "tag": "🟦 🔷 ETHEREUM (15m) 🟦",
         "buy_hdr": "🟩 BUY SIGNAL: ETH-USDT 🟩",
         "sell_hdr": "🟥 SELL SIGNAL: ETH-USDT 🟥",
     },
     "SOL-USDT": {
-        "tag": "🟪 🟣 SOLANA 🟪",
+        "tag": "🟪 🟣 SOLANA (15m) 🟪",
         "buy_hdr": "🟪🟩 BUY SIGNAL: SOL-USDT 🟪🟩",
         "sell_hdr": "🟪🟥 SELL SIGNAL: SOL-USDT 🟪🟥",
     },
@@ -62,7 +62,7 @@ def send_telegram(message):
     print(f"Telegram Error: {e}")
 
 
-def get_candles(symbol, bar="1H", limit=100):
+def get_candles(symbol, bar="15m", limit=100):
   global last_error
   try:
     params = {"instId": symbol, "bar": bar, "limit": limit}
@@ -101,24 +101,25 @@ def get_candles(symbol, bar="1H", limit=100):
 
 
 def get_previous_day_high_low(symbol):
-  """Daily High & Low મેળવવા માટેનું ફંક્શન."""
+  """1D timeframe માંથી ગઈકાલના High અને Low મેળવવા માટેનું ફંક્શન."""
   df_daily = get_candles(symbol, bar="1D", limit=5)
   if df_daily is not None and len(df_daily) >= 2:
-    prev_day = df_daily.iloc[-2]  # Yesterday's candle
+    prev_day = df_daily.iloc[-2]  # Yesterday's completed daily candle
     return float(prev_day["high"]), float(prev_day["low"])
   return None, None
 
 
 def calculate_indicators(symbol):
-  df_1h = get_candles(symbol, bar="1H", limit=50)
-  if df_1h is None or len(df_1h) < 10:
+  # 15m કેન્ડલ્સ ડેટા ફેચ કરો
+  df_15m = get_candles(symbol, bar="15m", limit=100)
+  if df_15m is None or len(df_15m) < 20:
     return None
 
   prev_day_high, prev_day_low = get_previous_day_high_low(symbol)
   if prev_day_high is None or prev_day_low is None:
     return None
 
-  entry_candle = df_1h.iloc[-2]  # Completed candle
+  entry_candle = df_15m.iloc[-2]  # તાજેતરમાં ક્લોઝ થયેલી 15-Min candle
 
   candle_ts = str(entry_candle["ts"])
   entry_close = float(entry_candle["close"])
@@ -129,12 +130,12 @@ def calculate_indicators(symbol):
   is_red = entry_close < entry_open
   is_green = entry_close > entry_open
 
-  # 📌 BUY Strategy: Low < Prev Day Low, Close > Prev Day Low, and Red Candle
+  # 📌 BUY Strategy: Low < Prev Day Low, Close > Prev Day Low, and Red Candle (15m)
   buy_signal = bool(
       (entry_low < prev_day_low) and (entry_close > prev_day_low) and is_red
   )
 
-  # 📌 SELL Strategy: High > Prev Day High, Close < Prev Day High, and Green Candle
+  # 📌 SELL Strategy: High > Prev Day High, Close < Prev Day High, and Green Candle (15m)
   sell_signal = bool(
       (entry_high > prev_day_high)
       and (entry_close < prev_day_high)
@@ -168,7 +169,7 @@ def alert_bot_loop():
           cfg = SYMBOL_CONFIG.get(
               symbol,
               {
-                  "tag": symbol,
+                  "tag": f"{symbol} (15m)",
                   "buy_hdr": f"*BUY: {symbol}*",
                   "sell_hdr": f"*SELL: {symbol}*",
               },
@@ -181,7 +182,7 @@ def alert_bot_loop():
           else:
             live_high, live_low = data["high"], data["low"]
 
-          # 📌 Active Positions SL / TP Tracking (100 ticks SL / 200 ticks TP)
+          # 📌 Active Positions SL / TP Tracking
           if active_signals[symbol] is not None:
             act = active_signals[symbol]
             side = act["side"]
@@ -217,7 +218,7 @@ def alert_bot_loop():
                 )
                 active_signals[symbol] = None
 
-          # 📌 Signal Generation
+          # 📌 Signal Generation (15-Minute Candle Close Check)
           if (
               active_signals[symbol] is None
               and last_processed_candle_ts[symbol] != current_candle_ts
@@ -241,6 +242,7 @@ def alert_bot_loop():
                   f"{cfg['tag']}\n"
                   f"{cfg['sell_hdr']}\n"
                   f"━━━━━━━━━━━━━━━━━━\n"
+                  f"⏱ Chart: 15-Min Candle\n"
                   f"📌 Entry Price: ${entry_price}\n"
                   f"🛑 Stop Loss: ${sl} (*100 Ticks / $1.00*)\n"
                   f"🎯 Take Profit: ${tp} (*200 Ticks / $2.00*)\n"
@@ -268,6 +270,7 @@ def alert_bot_loop():
                   f"{cfg['tag']}\n"
                   f"{cfg['buy_hdr']}\n"
                   f"━━━━━━━━━━━━━━━━━━\n"
+                  f"⏱ Chart: 15-Min Candle\n"
                   f"📌 Entry Price: ${entry_price}\n"
                   f"🛑 Stop Loss: ${sl} (*100 Ticks / $1.00*)\n"
                   f"🎯 Take Profit: ${tp} (*200 Ticks / $2.00*)\n"
@@ -291,13 +294,13 @@ def home():
   global latest_market_data, active_signals
   return jsonify({
       "status": "running",
-      "mode": "Gold Sweep Strategy Bot (SL: $1.00, TP: $2.00)",
+      "mode": "Gold Sweep 15m Strategy Bot (SL: $1.00, TP: $2.00)",
       "active_signals": active_signals,
       "market_data": latest_market_data,
   })
 
 
 if __name__ == "__main__":
-  send_telegram("⚡ *Gold Sweep Strategy Live Bot Active*")
+  send_telegram("⚡ *Gold Sweep 15-Min Strategy Live Bot Active*")
   port = int(os.environ.get("PORT", 10000))
   app.run(host="0.0.0.0", port=port)
