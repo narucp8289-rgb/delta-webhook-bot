@@ -16,9 +16,9 @@ SYMBOLS = ["PAXG-USDT", "ETH-USDT", "BTC-USDT", "SOL-USDT"]
 TELEGRAM_TOKEN = "8682624980:AAEBi3mlG6dTnG0DOmq5nJ50HsSLjU0FrFo"
 TELEGRAM_CHAT_ID = "5305261922"
 
-# Strategy Parameters (SL = $1.00 / 100 ticks, TP = $2.00 / 200 ticks)
-SL_DIST = 1.00  
-TP_DIST = 2.00  
+# Updated Strategy Parameters (Stoploss = 10 Points, Take Profit = 20 Points)
+SL_DIST = 10.0
+TP_DIST = 20.0
 
 SYMBOL_CONFIG = {
     "PAXG-USDT": {
@@ -101,16 +101,14 @@ def get_candles(symbol, bar="15m", limit=100):
 
 
 def get_previous_day_high_low(symbol):
-  """1D timeframe માંથી ગઈકાલના High અને Low મેળવવા માટેનું ફંક્શન."""
   df_daily = get_candles(symbol, bar="1D", limit=5)
   if df_daily is not None and len(df_daily) >= 2:
-    prev_day = df_daily.iloc[-2]  # Yesterday's completed daily candle
+    prev_day = df_daily.iloc[-2]
     return float(prev_day["high"]), float(prev_day["low"])
   return None, None
 
 
 def calculate_indicators(symbol):
-  # 15m કેન્ડલ્સ ડેટા ફેચ કરો
   df_15m = get_candles(symbol, bar="15m", limit=100)
   if df_15m is None or len(df_15m) < 20:
     return None
@@ -119,7 +117,7 @@ def calculate_indicators(symbol):
   if prev_day_high is None or prev_day_low is None:
     return None
 
-  entry_candle = df_15m.iloc[-2]  # તાજેતરમાં ક્લોઝ થયેલી 15-Min candle
+  entry_candle = df_15m.iloc[-2]
 
   candle_ts = str(entry_candle["ts"])
   entry_close = float(entry_candle["close"])
@@ -130,12 +128,9 @@ def calculate_indicators(symbol):
   is_red = entry_close < entry_open
   is_green = entry_close > entry_open
 
-  # 📌 BUY Strategy: Low < Prev Day Low, Close > Prev Day Low, and Red Candle (15m)
   buy_signal = bool(
       (entry_low < prev_day_low) and (entry_close > prev_day_low) and is_red
   )
-
-  # 📌 SELL Strategy: High > Prev Day High, Close < Prev Day High, and Green Candle (15m)
   sell_signal = bool(
       (entry_high > prev_day_high)
       and (entry_close < prev_day_high)
@@ -182,7 +177,6 @@ def alert_bot_loop():
           else:
             live_high, live_low = data["high"], data["low"]
 
-          # 📌 Active Positions SL / TP Tracking
           if active_signals[symbol] is not None:
             act = active_signals[symbol]
             side = act["side"]
@@ -193,13 +187,13 @@ def alert_bot_loop():
             if side == "BUY":
               if live_high >= tp:
                 send_telegram(
-                    "🎯 *TAKE PROFIT HIT (+200 Ticks)!*\n"
+                    "🎯 *TAKE PROFIT HIT (+20 Points)!*\n"
                     f"{cfg['tag']}\n\n📌 Entry: ${entry}\n🎯 TP: ${tp}"
                 )
                 active_signals[symbol] = None
               elif live_low <= sl:
                 send_telegram(
-                    "🛑 *STOP LOSS HIT (-100 Ticks)!*\n"
+                    "🛑 *STOP LOSS HIT (-10 Points)!*\n"
                     f"{cfg['tag']}\n\n📌 Entry: ${entry}\n🛑 SL: ${sl}"
                 )
                 active_signals[symbol] = None
@@ -207,28 +201,30 @@ def alert_bot_loop():
             elif side == "SELL":
               if live_low <= tp:
                 send_telegram(
-                    "🎯 *TAKE PROFIT HIT (+200 Ticks)!*\n"
+                    "🎯 *TAKE PROFIT HIT (+20 Points)!*\n"
                     f"{cfg['tag']}\n\n📌 Entry: ${entry}\n🎯 TP: ${tp}"
                 )
                 active_signals[symbol] = None
               elif live_high >= sl:
                 send_telegram(
-                    "🛑 *STOP LOSS HIT (-100 Ticks)!*\n"
+                    "🛑 *STOP LOSS HIT (-10 Points)!*\n"
                     f"{cfg['tag']}\n\n📌 Entry: ${entry}\n🛑 SL: ${sl}"
                 )
                 active_signals[symbol] = None
 
-          # 📌 Signal Generation (15-Minute Candle Close Check)
           if (
               active_signals[symbol] is None
               and last_processed_candle_ts[symbol] != current_candle_ts
           ):
 
-            # 1. SELL SIGNAL
             if data["sell_signal"]:
               entry_price = data["price"]
-              sl = round(entry_price + SL_DIST, 2)  # Entry + $1.00
-              tp = round(entry_price - TP_DIST, 2)  # Entry - $2.00
+              sl = round(
+                  entry_price + SL_DIST, 2
+              )  # Entry + 10 Points Stoploss
+              tp = round(
+                  entry_price - TP_DIST, 2
+              )  # Entry - 20 Points Target
 
               active_signals[symbol] = {
                   "side": "SELL",
@@ -244,19 +240,22 @@ def alert_bot_loop():
                   f"━━━━━━━━━━━━━━━━━━\n"
                   f"⏱ Chart: 15-Min Candle\n"
                   f"📌 Entry Price: ${entry_price}\n"
-                  f"🛑 Stop Loss: ${sl} (*100 Ticks / $1.00*)\n"
-                  f"🎯 Take Profit: ${tp} (*200 Ticks / $2.00*)\n"
+                  f"🛑 Stop Loss: ${sl} (*10 Points*)\n"
+                  f"🎯 Take Profit: ${tp} (*20 Points*)\n"
                   f"📈 Swept Prev High: ${data['prev_day_high']}\n"
                   f"━━━━━━━━━━━━━━━━━━\n"
                   f"👉 Action: SELL / SHORT"
               )
               send_telegram(msg)
 
-            # 2. BUY SIGNAL
             elif data["buy_signal"]:
               entry_price = data["price"]
-              sl = round(entry_price - SL_DIST, 2)  # Entry - $1.00
-              tp = round(entry_price + TP_DIST, 2)  # Entry + $2.00
+              sl = round(
+                  entry_price - SL_DIST, 2
+              )  # Entry - 10 Points Stoploss
+              tp = round(
+                  entry_price + TP_DIST, 2
+              )  # Entry + 20 Points Target
 
               active_signals[symbol] = {
                   "side": "BUY",
@@ -272,8 +271,8 @@ def alert_bot_loop():
                   f"━━━━━━━━━━━━━━━━━━\n"
                   f"⏱ Chart: 15-Min Candle\n"
                   f"📌 Entry Price: ${entry_price}\n"
-                  f"🛑 Stop Loss: ${sl} (*100 Ticks / $1.00*)\n"
-                  f"🎯 Take Profit: ${tp} (*200 Ticks / $2.00*)\n"
+                  f"🛑 Stop Loss: ${sl} (*10 Points*)\n"
+                  f"🎯 Take Profit: ${tp} (*20 Points*)\n"
                   f"📉 Swept Prev Low: ${data['prev_day_low']}\n"
                   f"━━━━━━━━━━━━━━━━━━\n"
                   f"👉 Action: BUY / LONG"
@@ -294,13 +293,13 @@ def home():
   global latest_market_data, active_signals
   return jsonify({
       "status": "running",
-      "mode": "Gold Sweep 15m Strategy Bot (SL: $1.00, TP: $2.00)",
+      "mode": "Gold Sweep 15m Strategy Bot (SL: 10 Pts, TP: 20 Pts)",
       "active_signals": active_signals,
       "market_data": latest_market_data,
   })
 
 
 if __name__ == "__main__":
-  send_telegram("⚡ *Gold Sweep 15-Min Strategy Live Bot Active*")
+  send_telegram("⚡ *Gold Sweep 15-Min Bot Active (SL: 10, TP: 20)*")
   port = int(os.environ.get("PORT", 10000))
   app.run(host="0.0.0.0", port=port)
